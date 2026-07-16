@@ -68,6 +68,23 @@ Para mitigar accesos indebidos a los endpoints B2C y al almacenamiento de archiv
   - **Cuerpo de la Petición (JSON)**: Cualquier subconjunto de campos a modificar.
   - **Dual Write**: Si el body contiene `estado_fase`, se ejecuta un `UPDATE` DML parametrizado en BigQuery (`ultra-bearing-492817-k6.db_reclutamiento1.maestro_busquedas`) para prevenir inyección SQL. Si no hay cambio de estado, la promesa analítica se omite automáticamente.
   - **Respuestas transaccionales**: `HTTP 200 OK` éxito total, `HTTP 207 Multi-Status` fallo parcial, `HTTP 500` fallo crítico.
+- **POST /api/v1/candidatos**: Registra una postulación de candidato (B2C) en el sistema.
+  - **Autenticación requerida**: Ninguna (Endpoint público B2C).
+  - **Cabeceras obligatorias**: `Content-Type: multipart/form-data`
+  - **Orígenes permitidos**: Whitelist de CORS (`ALLOWED_ORIGINS`).
+  - **Parámetros del cuerpo (Campos requeridos)**:
+    - `cv`: Archivo binario adjunto obligatorio (Formatos: `.pdf`, `.doc`, `.docx` con tamaño máximo de 5MB).
+    - `nombre_completo`: Cadena de texto.
+    - `email`: Cadena de texto.
+    - `acepta_privacidad`: Booleano obligatoriamente fijado en `true` para la trazabilidad y auditoría legal.
+  - **Parámetros del cuerpo (Campos opcionales)**:
+    - `puesto_postulacion`: Cadena de texto (ej. "Fullstack Developer").
+    - `linkedin_url`: Dirección URL del perfil.
+    - `origen`: Cadena de texto (ej. "landing_top").
+  - **Respuestas**:
+    - `HTTP 200 OK` (Fase 2 Mock): Retorna la confirmación y los metadatos del archivo.
+    - `HTTP 400 Bad Request`: Si no se adjunta el archivo cv, si el archivo excede los 5MB, posee una extensión no permitida, faltan campos obligatorios o si `acepta_privacidad` no es evaluado como `true`.
+    - `HTTP 403 Forbidden`: Si la petición web es de origen no autorizado (error de CORS).
 
 ## Instrucciones de Despliegue (CI/CD)
 
@@ -100,7 +117,7 @@ gcloud run deploy azulats-service1 \
 
 ### Notas para desarrollo local
 Levantar el servicio local, en la terminal: `npm start`
-Prueba: `curl -i http://localhost:8080/ping`
+Prueba: `curl -i http://localhost:8080/ping` debe dar ok operativa
 
 ### Otras informaciones del desarrollo (Google Cloud CLI Integrado)
 La infraestructura de desarrollo local ya cuenta con **Google Cloud CLI (gcloud)** integrado de forma automatizada y silenciosa (soportado por un intérprete portable de Python 3.10+ para omitir incompatibilidades de versión).
