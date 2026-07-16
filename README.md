@@ -18,7 +18,7 @@ Para asegurar que las operaciones transaccionales y analíticas estén sincroniz
 Las escrituras se realizan de forma física hacia **Google Cloud Firestore** y **Google Cloud BigQuery** de forma coordinada e independiente a través del framework native de promesas concurrente de JavaScript.
 
 ### Configuración de Conectores (GCP)
-* **Firestore & Storage (`src/config/firebase.js`)**: Inicializado mediante el SDK oficial `firebase-admin` usando la autenticación implícita y segura `applicationDefault()`. Exporta la instancia de base de datos transaccional `db` y la conexión al bucket de almacenamiento binario `bucket` (utilizando la variable `FIREBASE_STORAGE_BUCKET`).
+* **Firestore & Storage (`src/config/firebase.js`)**: Inicializado mediante el SDK oficial `firebase-admin` usando la autenticación implícita y segura `applicationDefault()`. Exporta la instancia de base de datos transaccional `db` y la conexión al bucket de almacenamiento binario `bucket` (asociado a `gs://azul-ats-1.firebasestorage.app` mediante la variable `FIREBASE_STORAGE_BUCKET` en `.env`).
 * **BigQuery (`src/config/bigquery.js`)**: Inicializado utilizando la clase `@google-cloud/bigquery`.
 
 ### Configuración de Seguridad y CORS (B2C)
@@ -122,6 +122,7 @@ Previamente la cuenta de servicios debe tener permisos para storage admin,logs w
 ---
 ## Log de Cambios (Changelog)
 
+* **2026-07-16**: Fase 1 de Pasarela B2C de Candidatos: Inicialización del repositorio Git local, creación de la rama `feature/candidatos-gateway`, instalación de paquetes npm necesarios (`multer` y `cors`), configuración e inicialización de Firebase Storage en el conector `firebase.js` (apuntando al bucket `azul-ats-1.firebasestorage.app`), adición de nuevas variables de entorno en `.env` y validación de compilación del backend.
 * **2026-07-11**: Preparación para despliegue en Cloud Run: creación del `Dockerfile` con imagen base `node:24-alpine` y el archivo `.dockerignore` (excluye `node_modules`, `.env`, `.git`, `README.md` y archivos del editor). Documentación de los comandos exactos de despliegue con `gcloud run deploy` en la región `europe-southwest1` con inyección de variables de entorno de producción.
 * **2026-07-11**: Implementación de los endpoints REST `GET /api/v1/busquedas` y `PATCH /api/v1/busquedas/:id` con Dual Write y protección transversal por JWT. `GET` lista documentos desde Firestore con ID inyectado. `PATCH` actualiza Firestore con `.update()` y ejecuta un `UPDATE` DML parametrizado en BigQuery (solo si se modifica `estado_fase`) para prevenir inyección SQL. Ambas rutas protegidas por el middleware `verificarToken`.
 * **2026-07-11**: Implementación del middleware de autenticación JWT (`src/middlewares/authMiddleware.js`) utilizando `firebase-admin/auth`. El middleware `verificarToken` extrae y valida el token del header `Authorization: Bearer`, inyecta el payload decodificado en `req.user` y devuelve `HTTP 401` si falta el token o `HTTP 403` si es inválido/expirado. Ruta `POST /api/v1/busquedas` protegida.
