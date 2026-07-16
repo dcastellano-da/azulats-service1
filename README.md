@@ -17,6 +17,15 @@ Para asegurar que las operaciones transaccionales y analíticas estén sincroniz
 
 Las escrituras se realizan de forma física hacia **Google Cloud Firestore** y **Google Cloud BigQuery** de forma coordinada e independiente a través del framework native de promesas concurrente de JavaScript.
 
+### Flujo Arquitectónico: Portal Público de Candidatos (B2C)
+El endpoint público `POST /api/v1/candidatos` expone un flujo coordinado en capas diseñado para gestionar la carga de currículums de forma segura y uniforme:
+1. **Validación Dinámica de CORS**: Comprobación dinámica de orígenes a través de la whitelist `ALLOWED_ORIGINS` configurada en el entorno, bloqueando peticiones desde orígenes cruzados no autorizados con código `HTTP 403`.
+2. **Procesamiento de Archivos en Memoria (Multer)**: Los binarios adjuntos no tocan el disco local del servidor (lo que saturaría el espacio efímero del contenedor en entornos serverless como Google Cloud Run), sino que se cargan en búferes de RAM temporales con restricciones rigurosas de tamaño (<5MB) y tipos MIME (.pdf, .doc, .docx).
+3. **Persistencia Física (Firebase Storage)**: Carga incremental de archivos al bucket `gs://azul-ats-1.firebasestorage.app/cvs/` bajo una codificación asíncrona que antepone un UUID único al nombre del archivo (`<UUID>_<nombre_archivo_sanitizado>`) para prevenir cualquier colisión o sobreescritura accidental.
+4. **Resguardo de Datos Transaccionales (Firestore)**: Tras completar la carga del binario a la nube, se persiste la información del candidato (incluyendo la dirección `gs://` del CV) en la colección transaccional `postulantes` de Firestore.
+5. **Mecanismo de Rollback de Coexistencia (Consistencia de Datos)**: Si por cualquier falla del cliente o de la base de datos la inserción en Firestore es rechazada, se detona una rutina catch que elimina inmediatamente el archivo cargado en Firebase Storage, garantizando que el almacenamiento permanezca libre de "archivos de CV huérfanos".
+6. **Streaming Analítico en BigQuery**: Sincronización automática unidireccional de los registros candidatos de la colección `postulantes` hacia BigQuery a través de Firebase Extensions.
+
 ### Configuración de Conectores (GCP)
 * **Firestore & Storage (`src/config/firebase.js`)**: Inicializado mediante el SDK oficial `firebase-admin` usando la autenticación implícita y segura `applicationDefault()`. Exporta la instancia de base de datos transaccional `db` y la conexión al bucket de almacenamiento binario `bucket` (asociado a `gs://azul-ats-1.firebasestorage.app` mediante la variable `FIREBASE_STORAGE_BUCKET` en `.env`).
 * **BigQuery (`src/config/bigquery.js`)**: Inicializado utilizando la clase `@google-cloud/bigquery`.
@@ -99,12 +108,33 @@ Para recopilar la información y modelar análisis posteriores, se asume la conf
     - `linkedin_url`: Dirección URL del perfil.
     - `origen`: Cadena de texto (ej. "landing_top").
   - **Respuestas**:
-    - `HTTP 200 OK` (Fase 2 Mock): Retorna la confirmación y los metadatos del archivo.
-    - `HTTP 400 Bad Request`: Si no se adjunta el archivo cv, si el archivo excede los 5MB, posee una extensión no permitida, faltan campos obligatorios o si `acepta_privacidad` no es evaluado como `true`.
-    - `HTTP 403 Forbidden`: Si la petición web es de origen no autorizado (error de CORS).
+    - `HTTP 201 Created` (Éxito transaccional): Postulación completada exitosamente. Devuelve el identificador único UUID del candidato y la ruta de almacenamiento canónica `gs://` del CV.
+    - `HTTP 400 Bad Request` (Error de validación): Si falta el archivo CV, excede los 5MB de tamaño, posee formato inválido, faltan campos obligatorios (nombre_completo, email, acepta_privacidad) o si `acepta_privacidad` no es enviado como `true` (requisito legal obligatorio).
+    - `HTTP 403 Forbidden` (Violación de CORS): Si el origen de la consulta web viola la configuración dinámica de CORS.
+    - `HTTP 500 Internal Server Error` (Fallo transaccional): Errores fatales al interactuar con Firebase Storage o Firestore (gatillándose la política automática de Rollback de archivo).
+
+## Estrategia de Control de Versiones con Git y GitHub
+El desarrollo del microservicio sigue un flujo de ramificación ordenado para garantizar que el entorno de producción permanezca verificado y aislar el desarrollo de nuevas características:
+* **Rama Principal (`main`)**: Rama oficial y de producción inmutable para código verificado. Todos los despliegues de Cloud Run se basan y cargan desde esta rama.
+* **Ramas de Características (`feature/`)**: Cada nueva funcionalidad o fase de desarrollo incremental se ejecuta en su propia rama aislada (por ejemplo, `feature/candidatos-gateway`), previniendo cambios no probados en el tronco común de producción.
+* **Ciclo de Integración**:
+  1. **Inicialización local**: Crear y cambiar a la rama de funcionalidad desde main actualizado:
+     ```bash
+     git checkout -b feature/candidatos-gateway
+     ```
+  2. **Confirmaciones Incrementales**: Commits atómicos agrupados con mensajes significativos (`git commit -m "feat/fix/docs/test: descripción del cambio"`).
+  3. **Copias de Seguridad / Sincronización Remota**: Subida inicial al repositorio seguro de GitHub:
+     ```bash
+     git push origin feature/candidatos-gateway
+     ```
+  4. **Merge y Consolidación de Main**: Después de pasar exitosamente los test integrados locales (`tests/prueba-postulantes.js`), se cambia a main local, se fusiona el feature, y se envía a producción:
+     ```bash
+     git checkout main
+     git merge feature/candidatos-gateway
+     git push origin main
+     ```
 
 ## Instrucciones de Despliegue (CI/CD)
-
 El microservicio está diseñado para ser contenerizado mediante Docker y desplegado en **Google Cloud Run**.
 
 * **Plataforma de despliegue**: Google Cloud Run
