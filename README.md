@@ -8,7 +8,8 @@ Servicio orquestador en Node.js desarrollado para ejecutarse en Google Cloud Run
 - **Entorno de ejecución**: Node.js 24
 - **Framework**: Express (servidor HTTP)
 - **Base de datos transaccional**: Firestore (SDK `firebase-admin`)
-- **Almacén analítico**: BigQuery (SDK `@google-cloud/bigquery`)
+- **Almacenamiento de archivos (B2C)**: Firebase Storage (SDK `firebase-admin/storage`)
+- **Control de accesos y archivos**: CORS (`cors`) y Multer (`multer`)
 - **Variables de entorno**: Gestionadas con `dotenv`
 
 ### Patrón Arquitectónico: Escritura Dual (Dual Write)
@@ -17,8 +18,12 @@ Para asegurar que las operaciones transaccionales y analíticas estén sincroniz
 Las escrituras se realizan de forma física hacia **Google Cloud Firestore** y **Google Cloud BigQuery** de forma coordinada e independiente a través del framework native de promesas concurrente de JavaScript.
 
 ### Configuración de Conectores (GCP)
-* **Firestore (`src/config/firebase.js`)**: Inicializado mediante el SDK oficial `firebase-admin` usando la autenticación implícita y segura `applicationDefault()`.
+* **Firestore & Storage (`src/config/firebase.js`)**: Inicializado mediante el SDK oficial `firebase-admin` usando la autenticación implícita y segura `applicationDefault()`. Exporta la instancia de base de datos transaccional `db` y la conexión al bucket de almacenamiento binario `bucket` (utilizando la variable `FIREBASE_STORAGE_BUCKET`).
 * **BigQuery (`src/config/bigquery.js`)**: Inicializado utilizando la clase `@google-cloud/bigquery`.
+
+### Configuración de Seguridad y CORS (B2C)
+Para mitigar accesos indebidos a los endpoints B2C y al almacenamiento de archivos, se utilizan políticas dinámicas de CORS:
+* **Lista Blanca de Orígenes (`ALLOWED_ORIGINS`)**: Variable en `.env` (separada por comas, ej: `http://localhost:3000,https://digitalagil.es`) que restringe dinámicamente qué clientes web pueden realizar peticiones al microservicio, rechazando accesos con comodín general (`*`).
 
 ### Endpoints Disponibles
 - **GET /ping**: Endpoint de salud y diagnóstico básico.
