@@ -25,7 +25,24 @@ Las escrituras se realizan de forma física hacia **Google Cloud Firestore** y *
 Para mitigar accesos indebidos a los endpoints B2C y al almacenamiento de archivos, se utilizan políticas dinámicas de CORS:
 * **Lista Blanca de Orígenes (`ALLOWED_ORIGINS`)**: Variable en `.env` (separada por comas, ej: `http://localhost:3000,https://digitalagil.es`) que restringe dinámicamente qué clientes web pueden realizar peticiones al microservicio, rechazando accesos con comodín general (`*`).
 
+### Esquema Firestore & Sincronización Analítica con BigQuery
+Para recopilar la información y modelar análisis posteriores, se asume la configuración de la extensión oficial **Stream Firestore to BigQuery** para la colección de candidatos.
+- **Colección Firestore**: `postulantes`
+- **Esquema de Destino BigQuery**:
+  | Campo Firestore | Tipo de Dato en BigQuery | Descripción |
+  | :--- | :--- | :--- |
+  | `id` | `STRING` | Identificador único UUIDv4 autogenerado |
+  | `nombre_completo` | `STRING` | Nombre del aspirante |
+  | `email` | `STRING` | Correo electrónico de contacto |
+  | `acepta_privacidad` | `BOOLEAN` | Trazabilidad legal obligatoria (debe ser `true`) |
+  | `puesto_postulacion` | `STRING` | Cargo al que aplica (por ejemplo, Frontend Engineer) |
+  | `linkedin_url` | `STRING` | Perfil social de LinkedIn (puede ser nulo) |
+  | `origen` | `STRING` | Canal de postulación (ej: landing) |
+  | `url_cv` | `STRING` | Dirección canónica gs:// del binario guardado en Cloud Storage |
+  | `createdAt` | `TIMESTAMP` | Marca temporal de la postulación |
+
 ### Endpoints Disponibles
+
 - **GET /ping**: Endpoint de salud y diagnóstico básico.
   - **Respuesta**: `{ "status": "ok", "message": "Azul ATS API operativa" }`
 - **POST /api/v1/busquedas** 🔒 *(Ruta protegida)*: Crea una nueva búsqueda en el ATS y gatilla la Escritura Dual física en Firestore y BigQuery.
@@ -139,6 +156,7 @@ Previamente la cuenta de servicios debe tener permisos para storage admin,logs w
 ---
 ## Log de Cambios (Changelog)
 
+* **2026-07-16**: Fase 3 de Pasarela B2C de Candidatos: Creación del controlador `src/controllers/candidatosController.js` con soporte para flujos en memoria de subida de archivos adjuntos a Firebase Storage, mapeo transaccional de perfiles en colección `postulantes` de Firestore, y mecanismo automatizado de rollback para remover archivos huérfanos del almacenamiento en la nube ante fallas de base de datos. Creación de tests automatizados native-fetch (`tests/prueba-postulantes.js`) y scripts de verificación.
 * **2026-07-16**: Fase 2 de Pasarela B2C de Candidatos: Creación del enrutador `src/routes/candidatosRoutes.js` con soporte Multer en memoria para archivos CV (límite 5MB, filtros PDF/DOC/DOCX), validaciones de los parámetros obligatorios del cuerpo (como la trazabilidad de privacidad legal obligatoria `acepta_privacidad: true`), integración dinámica de CORS y mapeo de errores de CORS mediante respuestas JSON en `index.js`.
 * **2026-07-16**: Fase 1 de Pasarela B2C de Candidatos: Inicialización del repositorio Git local, creación de la rama `feature/candidatos-gateway`, instalación de paquetes npm necesarios (`multer` y `cors`), configuración e inicialización de Firebase Storage en el conector `firebase.js` (apuntando al bucket `azul-ats-1.firebasestorage.app`), adición de nuevas variables de entorno en `.env` y validación de compilación del backend.
 * **2026-07-11**: Preparación para despliegue en Cloud Run: creación del `Dockerfile` con imagen base `node:24-alpine` y el archivo `.dockerignore` (excluye `node_modules`, `.env`, `.git`, `README.md` y archivos del editor). Documentación de los comandos exactos de despliegue con `gcloud run deploy` en la región `europe-southwest1` con inyección de variables de entorno de producción.
