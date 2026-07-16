@@ -1,0 +1,25 @@
+# Dependencias instaladas localmente — se reinstalan dentro del contenedor
+node_modules
+
+# Logs de npm
+npm-debug.log
+*.log
+
+# Variables de entorno locales — NUNCA subir al contenedor ni al repositorio
+.env
+.env.*
+
+# Control de versiones
+.git
+.gitignore
+
+# Documentación — no necesaria en el artefacto de producción
+README.md
+docs/
+
+# Archivos de sistema de macOS
+.DS_Store
+
+# Configuraciones del editor
+.vscode
+.idea

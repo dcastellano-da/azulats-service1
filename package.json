@@ -1,0 +1,16 @@
+{
+  "name": "azulats-service1",
+  "version": "1.0.0",
+  "description": "Microservicio Express para Google Cloud Run - Azul ATS API",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@google-cloud/bigquery": "^8.3.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "firebase-admin": "^14.1.0"
+  }
+}
