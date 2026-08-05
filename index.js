@@ -5,6 +5,7 @@ import express from 'express';
 import cors from 'cors';
 import busquedasRoutes from './src/routes/busquedasRoutes.js';
 import candidatosRoutes from './src/routes/candidatosRoutes.js';
+import pipelineRoutes from './src/routes/pipelineRoutes.js';
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -42,10 +43,12 @@ app.get('/ping', (req, res) => {
 // Registrar rutas del microservicio bajo el prefijo correspondiente
 app.use('/api/v1/busquedas', busquedasRoutes);
 app.use('/api/v1/candidatos', cors(corsOptions), candidatosRoutes);
+app.use('/api/v1/pipeline', cors(corsOptions), pipelineRoutes);
 
 // Manejador de errores para interceptar violaciones de CORS y otros errores de Express
 app.use((err, req, res, next) => {
   if (err.message === 'Origen no permitido por CORS') {
+    console.warn(`[SECURITY] Petición bloqueada por CORS. Origen rechazado: ${req.headers.origin}`);
     return res.status(403).json({
       status: 'error',
       message: 'Acceso denegado por políticas de CORS (origen no permitido).'

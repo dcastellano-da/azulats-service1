@@ -7,3 +7,4 @@ yarn-error.log*
 .DS_Store
 docs/
 gcloud auth application-default login/
+test_cv.pdf

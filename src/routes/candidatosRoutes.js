@@ -30,11 +30,12 @@ const upload = multer({
   fileFilter: fileFilter
 });
 
-import { registrarCandidato } from '../controllers/candidatosController.js';
+import { verificarToken } from '../middlewares/authMiddleware.js';
+import { registrarCandidato, obtenerCandidatos, actualizarCandidato, obtenerDocumentoCV, importarCandidatoIA } from '../controllers/candidatosController.js';
 
 const uploadCV = upload.single('cv');
 
-// Endpoint candidatos POST multipart/form-data (Integrado con controlador real)
+// Endpoint candidatos POST multipart/form-data (Integrado con controlador real B2C público)
 router.post('/', (req, res, next) => {
   uploadCV(req, res, (err) => {
     if (err) {
@@ -46,6 +47,32 @@ router.post('/', (req, res, next) => {
     next();
   });
 }, registrarCandidato);
+
+// Endpoints administrativos B2B (Protegidos)
+router.get('/', verificarToken, obtenerCandidatos);
+router.get('/:id/cv', verificarToken, obtenerDocumentoCV);
+router.patch('/:id', verificarToken, actualizarCandidato);
+
+// Endpoint administrativo B2B de importación asistida por Inteligencia Artificial (Genkit + Vertex AI)
+router.post('/importar-ia', verificarToken, (req, res, next) => {
+  uploadCV(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({
+        status: 'error',
+        message: err.message || 'Error al procesar la carga del archivo.'
+      });
+    }
+    next();
+  });
+}, importarCandidatoIA);
+
+/*
+// MEJORA FUTURA: Ruta DELETE /:id comentada para borrado físico (Super Administrador)
+// El descarte ordinario (Soft Delete) se gestiona de forma estándar mediante el PATCH anterior (estado_revision = 'Descartado').
+// Para habilitar el borrado total físico de cumplimiento RGPD, descomentar las siguientes líneas:
+// import { eliminarCandidatoFisico } from '../controllers/candidatosController.js';
+// router.delete('/:id', verificarToken, eliminarCandidatoFisico);
+*/
 
 export default router;
 
