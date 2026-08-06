@@ -1,7 +1,7 @@
 # ============================================================
 # Azul ATS — Microservicio Backend
 # Imagen base: Node.js 24 Alpine (mínima, segura y optimizada)
-# Plataforma de destino: Google Cloud Run (europe-southwest1)
+# Plataforma de destino: Google Cloud Run (us-east1)
 # ============================================================
 
 FROM node:24-alpine

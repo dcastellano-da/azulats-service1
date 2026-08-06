@@ -10,19 +10,57 @@ import pipelineRoutes from './src/routes/pipelineRoutes.js';
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// Configuración dinámica de CORS basada en ALLOWED_ORIGINS
+// =============================================================================
+// CORS Dinámico por Entorno
+// -----------------------------------------------------------------------------
+// Producción (NODE_ENV=production):
+//   Solo se permiten los orígenes declarados en ALLOWED_ORIGINS (lista exacta).
+//   Cualquier otro origen es bloqueado con HTTP 403.
+//
+// Staging / Desarrollo (NODE_ENV != production):
+//   Además de la whitelist, se autorizan dinámicamente las URLs de preview
+//   generadas por Firebase App Hosting (*.hosted.app) mediante Regex,
+//   eliminando la necesidad de actualizar la variable manualmente en cada rama.
+// =============================================================================
+
+// Lista blanca de orígenes desde variable de entorno (separados por coma)
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
   .split(',')
   .map(origin => origin.trim().toLowerCase())
   .filter(Boolean);
 
+// Regex para URLs de preview de Firebase App Hosting
+// Cubre el patrón: https://[proyecto]--[branch-hash].hosted.app
+const FIREBASE_PREVIEW_REGEX = /^https:\/\/[a-zA-Z0-9-]+(--[a-zA-Z0-9-]+)?\.hosted\.app$/;
+
+const isProduction = process.env.NODE_ENV === 'production';
+
+/**
+ * Resuelve si un origen está autorizado según el entorno activo.
+ * @param {string|undefined} origin - Cabecera Origin de la petición entrante.
+ * @returns {boolean}
+ */
+export function isOriginAllowed(origin) {
+  if (!origin) return true; // curl, Postman, health checks de Cloud Run
+
+  const normalizedOrigin = origin.toLowerCase();
+  const isInAllowlist = allowedOrigins.includes(normalizedOrigin);
+
+  if (isProduction) {
+    // Producción: estricto — solo orígenes explícitos en la whitelist
+    return isInAllowlist;
+  } else {
+    // Staging/Desarrollo: whitelist + previews dinámicos de Firebase App Hosting
+    return isInAllowlist || FIREBASE_PREVIEW_REGEX.test(origin);
+  }
+}
+
 const corsOptions = {
   origin: (origin, callback) => {
-    // Permitir peticiones si no hay cabecera Origin (curl, postman, etc.)
-    // o si el origen está explícitamente en la lista blanca de orígenes
-    if (!origin || allowedOrigins.includes(origin.toLowerCase())) {
+    if (isOriginAllowed(origin)) {
       callback(null, true);
     } else {
+      console.warn(`[SECURITY] Petición bloqueada por CORS. Entorno: ${process.env.NODE_ENV || 'development'}. Origen rechazado: ${origin}`);
       callback(new Error('Origen no permitido por CORS'));
     }
   },
