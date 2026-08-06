@@ -37,8 +37,14 @@ jobs:
 
       # 4. ── BARRERA DE CONTENCIÓN ─────────────────────────────────────────
       #    Si este paso falla, el workflow se cancela y el deploy NO ocurre.
+      #    Las variables se inyectan aquí para que env.test.js pueda validarlas
+      #    (incluye ALLOWED_ORIGINS porque el test lo verifica cuando NODE_ENV=production).
       - name: Run unit tests
         run: npm test
+        env:
+          GOOGLE_CLOUD_PROJECT: ${{ secrets.GOOGLE_CLOUD_PROJECT_PRODUCTION }}
+          FIREBASE_STORAGE_BUCKET: ${{ secrets.FIREBASE_STORAGE_BUCKET_PRODUCTION }}
+          ALLOWED_ORIGINS: ${{ secrets.ALLOWED_ORIGINS_PRODUCTION }}
 
       # 5. Autenticar en Google Cloud con la Service Account del Proyecto B
       - name: Authenticate to Google Cloud (Production)

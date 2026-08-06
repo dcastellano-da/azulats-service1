@@ -508,9 +508,21 @@ Deben configurarse en `Settings → Secrets and variables → Actions` del repos
 * **Contenerización**: Docker — imagen base `node:24-alpine`
 * **Seguridad**: `--allow-unauthenticated` a nivel de Cloud Run (la seguridad se gestiona internamente con el middleware JWT `verificarToken`).
 
+-------------------------------------------------------------------------------------------------------------------------
+# DESPLIEGUE NUEVO (CON CI/CD)
+```bash
+git checkout develop 
+git add .
+git commit -m "chore: implementación de CI/CD, tests unitarios y separación de entornos"
+git push origin develop
+```
+Verificiones:
+En GitHub, en la rama develop, ver commit reciente. Y en Action, ver el workflow.
+En Google Cloud Run, ver la fecha actualizada del servicio.
+
 
 -------------------------------------------------------------------------------------------------------------------------
-# DESPLIEGUE MANUAL (Fallback)
+## DESPLIEGUE MANUAL (Fallback)
 
 > [!NOTE]
 > Los despliegues normales ocurren **automáticamente** via GitHub Actions al hacer push a `develop` (Staging) o `main` (Producción). El procedimiento manual a continuación es un **fallback de emergencia** o para uso en desarrollo local.

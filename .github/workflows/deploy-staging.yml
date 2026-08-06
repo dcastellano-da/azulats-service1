@@ -36,8 +36,13 @@ jobs:
 
       # 4. ── BARRERA DE CONTENCIÓN ─────────────────────────────────────────
       #    Si este paso falla, el workflow se cancela y el deploy NO ocurre.
+      #    Las variables se inyectan aquí para que env.test.js pueda validarlas
+      #    sin necesidad de tener el servidor levantado ni conexión a GCP.
       - name: Run unit tests
         run: npm test
+        env:
+          GOOGLE_CLOUD_PROJECT: ${{ secrets.GOOGLE_CLOUD_PROJECT_STAGING }}
+          FIREBASE_STORAGE_BUCKET: ${{ secrets.FIREBASE_STORAGE_BUCKET_STAGING }}
 
       # 5. Autenticar en Google Cloud con la Service Account del Proyecto A
       - name: Authenticate to Google Cloud (Staging)
