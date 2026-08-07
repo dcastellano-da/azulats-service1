@@ -429,37 +429,103 @@ El microservicio implementa logs a nivel de aplicación estructurados para facil
   * Log: `console.error("[ERROR] Fallo transaccional en pasarela de candidatos. Iniciando Rollback. Causa: <error.message>")`
 
 ## Estrategia de Control de Versiones con Git y GitHub
-El desarrollo del microservicio sigue un flujo de ramificación ordenado para garantizar que el entorno de producción permanezca verificado y aislar el desarrollo de nuevas características:
-* **Rama Principal (`main`)**: Rama oficial y de producción inmutable para código verificado. Todos los despliegues de Cloud Run se basan y cargan desde esta rama.
-* **Ramas de Características (`feature/`)**: Cada nueva funcionalidad o fase de desarrollo incremental se ejecuta en su propia rama aislada (por ejemplo, `feature/candidatos-gateway`), previniendo cambios no probados en el tronco común de producción.
+El desarrollo del microservicio sigue un flujo de ramificación de **tres niveles** para garantizar que el entorno de producción permanezca siempre verificado y estable:
+
+| Rama | Entorno | Proyecto GCP | Despliegue |
+|---|---|---|---|
+| `main` | **Producción** | `azul-ats-prod` | Automático via GitHub Actions al hacer merge desde `develop` |
+| `develop` | **Staging** | `azul-ats-1` | Automático via GitHub Actions en cada push |
+| `feature/*` | Local / PR | — | Manual (`npm start`) |
+
+* **Rama Principal (`main`)**: Rama oficial de producción. Solo recibe código a través de Pull Requests aprobados desde `develop`. El merge a `main` dispara automáticamente el deploy al Proyecto B (`azul-ats-prod`).
+* **Rama de Integración (`develop`)**: Rama de staging. Todos los features se integran aquí antes de llegar a producción. Cada push dispara automáticamente el deploy al Proyecto A (`azul-ats-1`).
+* **Ramas de Características (`feature/`)**: Cada nueva funcionalidad se desarrolla en su propia rama aislada (por ejemplo, `feature/candidatos-gateway`).
 * **Ciclo de Integración**:
-  1. **Inicialización local**: Crear y cambiar a la rama de funcionalidad desde main actualizado:
+  1. **Crear rama de feature desde `develop` actualizado**:
      ```bash
-     git checkout -b feature/candidatos-gateway
+     git checkout develop
+     git pull origin develop
+     git checkout -b feature/nueva-funcionalidad
      ```
-  2. **Confirmaciones Incrementales**: Commits atómicos agrupados con mensajes significativos (`git commit -m "feat/fix/docs/test: descripción del cambio"`).
-  3. **Copias de Seguridad / Sincronización Remota**: Subida inicial al repositorio seguro de GitHub:
+  2. **Commits incrementales** con mensajes significativos (`feat/fix/docs/test: descripción`).
+  3. **Publicar y abrir Pull Request hacia `develop`**:
      ```bash
-     git push origin feature/candidatos-gateway
+     git push origin feature/nueva-funcionalidad
+     # Abrir PR en GitHub: feature/nueva-funcionalidad → develop
      ```
-  4. **Merge y Consolidación de Main**: Después de pasar exitosamente los test integrados locales (`tests/prueba-postulantes.js`), se cambia a main local, se fusiona el feature, y se envía a producción:
-     ```bash
-     git checkout main
-     git merge feature/candidatos-gateway
-     git push origin main
-     ```
+  4. **Merge a `develop`** → GitHub Actions despliega automáticamente en Staging.
+  5. **Validar en Staging** → Una vez verificado, abrir PR `develop → main`.
+  6. **Merge a `main`** → GitHub Actions despliega automáticamente en Producción.
 
-## Instrucciones de Despliegue (CI/CD)
-El microservicio está diseñado para ser contenerizado mediante Docker y desplegado en **Google Cloud Run**.
+## CI/CD Automatizado con GitHub Actions
 
+A partir de este release, los despliegues son **completamente automáticos** y están protegidos por pruebas unitarias como barrera de contención.
+
+### Flujo de despliegue
+
+```
+feature/* → PR → develop  →  [Tests ✅] → Deploy automático → Staging (azul-ats-1)
+                   ↓
+                   PR → main  →  [Tests ✅] → Deploy automático → Producción (azul-ats-prod)
+```
+
+> [!IMPORTANT]
+> **Barrera de contención**: Si `npm test` falla en cualquier punto, el pipeline se cancela inmediatamente y **el deploy no ocurre**. Esto protege tanto Staging como Producción.
+
+### Workflows
+
+| Archivo | Trigger | Entorno destino |
+|---|---|---|
+| [`.github/workflows/deploy-staging.yml`](.github/workflows/deploy-staging.yml) | Push a `develop` | Cloud Run en `azul-ats-1` |
+| [`.github/workflows/deploy-production.yml`](.github/workflows/deploy-production.yml) | Push a `main` | Cloud Run en `azul-ats-prod` |
+
+### GitHub Secrets requeridos
+
+Deben configurarse en `Settings → Secrets and variables → Actions` del repositorio antes del primer deploy.
+
+| Secret | Entorno | Descripción |
+|---|---|---|
+| `GCP_SA_KEY_STAGING` | Staging | JSON completo de la Service Account del Proyecto A |
+| `GCP_SA_KEY_PRODUCTION` | Producción | JSON completo de la Service Account del Proyecto B |
+| `GCP_PROJECT_STAGING` | Staging | `azul-ats-1` |
+| `GCP_PROJECT_PRODUCTION` | Producción | `azul-ats-prod` |
+| `GOOGLE_CLOUD_PROJECT_STAGING` | Staging | `azul-ats-1` |
+| `GOOGLE_CLOUD_PROJECT_PRODUCTION` | Producción | `azul-ats-prod` |
+| `FIREBASE_STORAGE_BUCKET_STAGING` | Staging | `azul-ats-1.firebasestorage.app` |
+| `FIREBASE_STORAGE_BUCKET_PRODUCTION` | Producción | Bucket del Proyecto B |
+| `ALLOWED_ORIGINS_PRODUCTION` | Producción | `https://digitalagil.es,https://www.digitalagil.es` |
+| `BIGQUERY_PROJECT_ID` | Ambos | `ultra-bearing-492817-k6` |
+
+> [!WARNING]
+> La Service Account de cada proyecto necesita los roles: `Cloud Run Admin`, `Storage Admin`, `Artifact Registry Writer`, `Service Account User`, `Logs Writer`.
+
+> [!NOTE]
+> **Deuda técnica**: La autenticación mediante SA Key JSON será migrada a **Workload Identity Federation** en una iteración futura para eliminar credenciales descargables del flujo de CI/CD.
+
+### Instrucciones de Despliegue
 * **Plataforma de despliegue**: Google Cloud Run
-* **Región de despliegue**: `us-east1` (por Argentina y España)
+* **Región de despliegue**: `us-east1` (Argentina y España)
 * **Contenerización**: Docker — imagen base `node:24-alpine`
 * **Seguridad**: `--allow-unauthenticated` a nivel de Cloud Run (la seguridad se gestiona internamente con el middleware JWT `verificarToken`).
 
+-------------------------------------------------------------------------------------------------------------------------
+# DESPLIEGUE NUEVO (CON CI/CD)
+```bash
+git checkout develop 
+git add .
+git commit -m "chore: implementación de CI/CD, tests unitarios y separación de entornos"
+git push origin develop
+```
+Verificiones:
+En GitHub, en la rama develop, ver commit reciente. Y en Action, ver el workflow.
+En Google Cloud Run, ver la fecha actualizada del servicio.
+
 
 -------------------------------------------------------------------------------------------------------------------------
-# DESPLIEGUE EN PRODUCCION
+## DESPLIEGUE MANUAL (Fallback)
+
+> [!NOTE]
+> Los despliegues normales ocurren **automáticamente** via GitHub Actions al hacer push a `develop` (Staging) o `main` (Producción). El procedimiento manual a continuación es un **fallback de emergencia** o para uso en desarrollo local.
 
 ```bash
 # 1. Autenticarse con Google Cloud (solo la primera vez o al renovar sesión)
@@ -468,18 +534,27 @@ gcloud auth login  # para iniciar sesión
 
 # 2. Seleccionar el proyecto de Firebase/Firestore como proyecto activo
 gcloud config list  # para ver el proyecto activo
-gcloud config set project azul-ats-1
+gcloud config set project azul-ats-1  # o azul-ats-prod para producción
 
 # 3. Desplegar el servicio en Cloud Run (build + push + deploy automatizados)
 #    Las variables de entorno se inyectan directamente en el contenedor
+#    STAGING:
 gcloud run deploy azulats-service1 \
   --source . \
   --region us-east1 \
   --allow-unauthenticated \
-  --update-env-vars GOOGLE_CLOUD_PROJECT=azul-ats-1,BIGQUERY_PROJECT_ID=ultra-bearing-492817-k6,FIREBASE_STORAGE_BUCKET=azul-ats-1.firebasestorage.app
+  --set-env-vars NODE_ENV=staging,GOOGLE_CLOUD_PROJECT=azul-ats-1,BIGQUERY_PROJECT_ID=ultra-bearing-492817-k6,FIREBASE_STORAGE_BUCKET=azul-ats-1.firebasestorage.app
+
+#    PRODUCCIÓN:
+gcloud run deploy azulats-service1 \
+  --source . \
+  --region us-east1 \
+  --project azul-ats-prod \
+  --allow-unauthenticated \
+  --set-env-vars NODE_ENV=production,GOOGLE_CLOUD_PROJECT=azul-ats-prod,BIGQUERY_PROJECT_ID=ultra-bearing-492817-k6,FIREBASE_STORAGE_BUCKET=<BUCKET_PROD>,ALLOWED_ORIGINS=https://digitalagil.es,https://www.digitalagil.es
 ```
 
-> **Nota**: el comando `--source .` activa Cloud Build en remoto, que ejecuta el `Dockerfile` incluido en el repositorio. Las variables sensibles como `BIGQUERY_PROJECT_ID` no se incluyen en la imagen — solo se inyectan en el entorno de ejecución del contenedor.
+> **Nota**: el comando `--source .` activa Cloud Build en remoto, que ejecuta el `Dockerfile` incluido en el repositorio. Las variables sensibles no se incluyen en la imagen — solo se inyectan en el entorno de ejecución del contenedor.
 
 
 ------------------------------------------------------------------------------------------------------
@@ -489,6 +564,12 @@ Renovar sesión en local:
 gcloud auth application-default login
 ```
 Levantar el servicio local, en la terminal: `npm start`
+
+Ejecutar las pruebas unitarias:
+```bash
+npm test
+```
+
 Para probar la base Firestore local, (no usar, para desarrollo y prueba usamos la del Firebase Cloud):
 ```bash
 NODE_ENV=test npm start
@@ -546,15 +627,19 @@ A continuación, se detalla una guía rápida de diagnóstico y resolución de e
   * **Causa**: Ocurre si la variable de entorno `NEXT_PUBLIC_ATS_API_URL` posee un formato erróneo (como barras diagonales finales `/` u otros esquemas de formato como Markdown), forzando al cliente Next.js a realizar una petición relativa errónea hacia su propio host.
   * **Solución**: Limpiar el valor registrado en Firebase App Hosting a texto plano estricto y forzar una recompilación/despliegue (**Rollout**).
 * **Error 403 Forbidden (Bloqueo de CORS)**:
-  * **Causa**: Ocurre cuando el servidor está activo y funcional, pero rechaza la solicitud entrante debido a que el origen cliente (ej. un nuevo canal generado dinámicamente en una rama de **Preview**) no ha sido declarado en los orígenes permitidos.
-  * **Solución**: Añadir el dominio a la variable `ALLOWED_ORIGINS` en la revisión correspondiente de Cloud Run de forma acumulativa y separada por comas.
+  * **Causa**: Ocurre cuando el servidor está activo y funcional, pero rechaza la solicitud entrante debido a que el origen cliente no ha sido autorizado por las políticas CORS del entorno activo.
+  * **En Producción** (`NODE_ENV=production`): Solo se permiten `https://digitalagil.es` y `https://www.digitalagil.es`. Cualquier otro origen es bloqueado.
+  * **En Staging** (`NODE_ENV=staging`): Se permiten los orígenes de la whitelist más cualquier URL `*.hosted.app` de Firebase App Hosting previews (vía Regex automática). No es necesario actualizar `ALLOWED_ORIGINS` manualmente para cada nueva rama de preview.
+  * **Solución en Producción**: Si se agrega un nuevo dominio oficial, actualizar `ALLOWED_ORIGINS_PRODUCTION` en los GitHub Secrets y hacer redeploy.
+  * **Solución en Staging**: Las URLs `*.hosted.app` están autorizadas automáticamente. Si el error persiste, verificar que el entorno esté corriendo con `NODE_ENV=staging`.
 
 
 
 --------------------------------------------------------------------------------------------------------------------------------------
 # Log de Cambios (Changelog)
 
-* **2026-07-29**: Optimización de la respuesta y trazabilidad del Módulo Pipeline (`/api/v1/pipeline`). Se aseguró la presencia explícita de `id` en la raíz de cada objeto retornado en `GET /api/v1/pipeline`, la serialización en `snake_case` de `resultado_screening`, `fit_score_screening`, `tiene_knockout` y `fecha_modificacion_screening`, la eliminación de filtros/proyecciones de campos en Firestore y la coincidencia estricta entre `claves_conexion.id_candidato` y la clave primaria `id` del documento del candidato en Firestore (con búsqueda de respaldo ante IDs alternativos).
+* **2026-08-05**: Separación de entornos Staging/Producción con CI/CD automatizado. Implementación de dos workflows de GitHub Actions (`.github/workflows/deploy-staging.yml` y `deploy-production.yml`) que despliegan automáticamente en `azul-ats-1` (Staging) y `azul-ats-prod` (Producción) al hacer push a `develop` y `main` respectivamente. Refactorización del middleware CORS en `index.js` con lógica dinámica por entorno: modo producción estricto (whitelist exacta: `digitalagil.es` y `www.digitalagil.es`) y modo staging con Regex que autoriza automáticamente URLs de preview de Firebase App Hosting (`*.hosted.app`). Incorporación de pruebas unitarias aisladas con Jest (`tests/unit/cors.test.js`, `tests/unit/env.test.js`) como barrera de contención bloqueante en el pipeline CI/CD. Corrección del comentario de región en `Dockerfile` (`europe-southwest1` → `us-east1`). Actualización de la estrategia de branching a flujo de tres niveles (`feature/* → develop → main`).
+ Se aseguró la presencia explícita de `id` en la raíz de cada objeto retornado en `GET /api/v1/pipeline`, la serialización en `snake_case` de `resultado_screening`, `fit_score_screening`, `tiene_knockout` y `fecha_modificacion_screening`, la eliminación de filtros/proyecciones de campos en Firestore y la coincidencia estricta entre `claves_conexion.id_candidato` y la clave primaria `id` del documento del candidato en Firestore (con búsqueda de respaldo ante IDs alternativos).
 * **2026-07-25**: Reubicación del campo `canal_ingreso` desde el módulo Pipeline de Entrevistas (`f1_descubrimiento`) hacia el módulo maestro de Candidatos / Postulantes. Ahora `canal_ingreso` es un campo opcional y mutable del perfil del candidato, soportado en creación (B2C e inferencia/override en importación por IA), edición vía `PATCH` y schemas de Zod.
 * **2026-07-24**: Soporte de campos `resumen` (resumen profesional) y `rubros` (sectores e industrias separadas por comas) de forma opcional en los controladores de creación, edición, extracción con inteligencia artificial (Zod schema e importar-ia) y verificación automatizada mediante suite de tests.
 * **2026-07-23**: Rediseño y expansión del Módulo Pipeline de Entrevistas (Mejoras Julio 2026). Separación del bloque `evaluacion` en sub-bloques independientes `f2_evaluacion` (con `puntaje_tecnico`) y `f3_cliente` (con `feedback_cliente`). Reubicación global del descarte operativo al objeto `resolucion`. Flexibilización de agendamientos mediante arreglos dinámicos de `reuniones` en todas las fases (F1-F4) con validación mediante Zod y autogeneración de ID UUIDv4 para reuniones creadas por el servidor. Implementación de una batería de pruebas de integración completa (`tests/prueba-pipeline.js`) y de soporte transparente para retrocompatibilidad con esquemas heredados.
