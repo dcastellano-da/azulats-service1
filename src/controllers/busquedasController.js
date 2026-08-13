@@ -60,6 +60,7 @@ export const crearBusqueda = async (req, res) => {
     condiciones,
     estado_sla,
     criterios_screening: criteriosScreeningInput,
+    codigo_busqueda: codigoBusquedaInput,
     id_busqueda
   } = req.body;
 
@@ -90,13 +91,14 @@ export const crearBusqueda = async (req, res) => {
     }
   }
 
-  // Generación de ID en Firestore si no se pasa uno por parámetro
-  const nuevaBusquedaRef = db.collection('busquedas').doc();
-  const idBusquedaReal = id_busqueda || nuevaBusquedaRef.id;
-  const docRef = db.collection('busquedas').doc(idBusquedaReal);
+  // Generación de ID autogenerado en Firestore y desacoplamiento de codigo_busqueda
+  const docRef = db.collection('busquedas').doc();
+  const idBusquedaReal = docRef.id;
+  const codigoBusquedaVal = codigoBusquedaInput || id_busqueda || null;
 
   const documentoFirestore = {
     id_busqueda: idBusquedaReal,
+    codigo_busqueda: codigoBusquedaVal,
     identificacion: {
       cliente: identificacion.cliente,
       hiring_manager: identificacion.hiring_manager || null,
