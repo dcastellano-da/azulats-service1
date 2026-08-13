@@ -127,10 +127,10 @@ if (process.env.NODE_ENV === 'test') {
 } else {
   initializeApp({
     credential: applicationDefault(),
-    storageBucket: process.env.FIREBASE_STORAGE_BUCKET
+    storageBucket: process.env.FIREBASE_STORAGE_BUCKET || 'azul-ats-1.firebasestorage.app'
   });
   db = getFirestore();
-  bucket = getStorage().bucket();
+  bucket = getStorage().bucket(process.env.FIREBASE_STORAGE_BUCKET || 'azul-ats-1.firebasestorage.app');
 }
 
 export { db, bucket };

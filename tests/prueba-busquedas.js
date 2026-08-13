@@ -84,6 +84,19 @@ async function start() {
     body: busquedaExitosa
   }, 201);
 
+  const createdDocId = postResult.body?.data?.id_busqueda;
+  const createdCodigo = postResult.body?.data?.codigo_busqueda;
+
+  if (!createdDocId || createdDocId === 'REQ-MOCK-001') {
+    console.error('❌ ERROR: El id_busqueda debe ser un ID autogenerado limpio y no el valor plano original.');
+    process.exit(1);
+  }
+
+  if (createdCodigo !== 'REQ-MOCK-001') {
+    console.error('❌ ERROR: El codigo_busqueda debe preservar el identificador de negocio "REQ-MOCK-001".');
+    process.exit(1);
+  }
+
   if (
     !Array.isArray(postResult.body.data.criterios_screening) ||
     postResult.body.data.criterios_screening.length !== 2 ||
@@ -93,6 +106,7 @@ async function start() {
     console.error('❌ ERROR: Los criterios_screening no se crearon adecuadamente con UUIDs inmutables.');
     process.exit(1);
   }
+  console.log(`✅ Aprobado: Búsqueda creada con id_busqueda autogenerado "${createdDocId}" y codigo_busqueda "${createdCodigo}"`);
   console.log('✅ Aprobado: criterios_screening guardados con UUIDs inmutables:', postResult.body.data.criterios_screening);
 
   // 2. Falla registrar búsqueda con campos requeridos ausentes
@@ -141,7 +155,7 @@ async function start() {
   // 6. PATCH /:id exitoso (mutar estado_busqueda y prioridad)
   await runTestCase('PATCH /:id (Update) exitoso de campos permitidos (estado_busqueda y prioridad)', {
     method: 'PATCH',
-    url: `${BASE_URL}/REQ-MOCK-001`,
+    url: `${BASE_URL}/${createdDocId}`,
     headers: {
       'Authorization': 'Bearer mock-token-recruiter',
       'Content-Type': 'application/json'
@@ -155,7 +169,7 @@ async function start() {
   // 7. PATCH /:id exitoso (mutar criterios_screening sobre la marcha)
   const patchCriteriosRes = await runTestCase('PATCH /:id (Update) exitoso de criterios_screening sobre la marcha', {
     method: 'PATCH',
-    url: `${BASE_URL}/REQ-MOCK-001`,
+    url: `${BASE_URL}/${createdDocId}`,
     headers: {
       'Authorization': 'Bearer mock-token-recruiter',
       'Content-Type': 'application/json'
@@ -180,7 +194,7 @@ async function start() {
   // 8. PATCH /:id exitoso usando sub-bloques anidados y nuevos campos descriptivos
   await runTestCase('PATCH /:id (Update) exitoso de nuevos campos descriptivos anidados', {
     method: 'PATCH',
-    url: `${BASE_URL}/REQ-MOCK-001`,
+    url: `${BASE_URL}/${createdDocId}`,
     headers: {
       'Authorization': 'Bearer mock-token-recruiter',
       'Content-Type': 'application/json'
@@ -209,7 +223,7 @@ async function start() {
   // 8b. PATCH /:id exitoso enviando criterios_screening dentro de estado_sla o camelCase criteriosScreening
   const patchNestedCriterios = await runTestCase('PATCH /:id (Update) exitoso enviando criterios_screening dentro de estado_sla', {
     method: 'PATCH',
-    url: `${BASE_URL}/REQ-MOCK-001`,
+    url: `${BASE_URL}/${createdDocId}`,
     headers: {
       'Authorization': 'Bearer mock-token-recruiter',
       'Content-Type': 'application/json'
@@ -237,7 +251,7 @@ async function start() {
   // 9. PATCH /:id ignora campos no reconocidos (Zod .strip()) al enviar propiedades no definidas junto a campos válidos
   await runTestCase('PATCH /:id (Update) ignora propiedades no reconocidas (.strip()) y actualiza campos permitidos', {
     method: 'PATCH',
-    url: `${BASE_URL}/REQ-MOCK-001`,
+    url: `${BASE_URL}/${createdDocId}`,
     headers: {
       'Authorization': 'Bearer mock-token-recruiter',
       'Content-Type': 'application/json'
@@ -254,7 +268,7 @@ async function start() {
   // 10. PATCH /:id devuelve HTTP 400 si solo se envían campos no permitidos/reconocidos (sin nada que actualizar)
   await runTestCase('PATCH /:id (Update) devuelve 400 si no se incluye ningún campo válido tras .strip()', {
     method: 'PATCH',
-    url: `${BASE_URL}/REQ-MOCK-001`,
+    url: `${BASE_URL}/${createdDocId}`,
     headers: {
       'Authorization': 'Bearer mock-token-recruiter',
       'Content-Type': 'application/json'

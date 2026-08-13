@@ -174,7 +174,7 @@ Para recopilar la información y modelar análisis posteriores, se asume la conf
   - **Cuerpo de la Petición (JSON) - Esquema agrupado jerárquico**:
     ```json
     {
-      "id_busqueda": "REQ-MOCK-001",
+      "codigo_busqueda": "ANALISTA ADMINISTRATIVO",
       "identificacion": {
         "cliente": "Banco de Barcelona",
         "hiring_manager": "Andrés Iniesta",
@@ -199,10 +199,12 @@ Para recopilar la información y modelar análisis posteriores, se asume la conf
       }
     }
     ```
-  - **Identificador de Búsqueda**: Si `id_busqueda` no se proporciona en el cuerpo, se autogenera mediante el ID del documento en Firestore.
+  - **Identificador de Búsqueda (`id_busqueda`) y Código de Búsqueda (`codigo_busqueda`)**:
+    - `id_busqueda`: Es el ID autogenerado del documento en Firestore (garantizando caracteres seguros sin espacios ni símbolos especiales).
+    - `codigo_busqueda`: Es el identificador visual o de negocio ingresado por el usuario (ej. `"ANALISTA ADMINISTRATIVO"`, `"REQ-MOCK-001"`). Si el cliente envía `id_busqueda` o `codigo_busqueda` en el body, dicho valor se guarda en la propiedad `codigo_busqueda` del documento.
   - **Validación de campos**: Los bloques `identificacion` (junto con su propiedad `cliente`), `perfil_tecnico` (con `rol_solicitado`) y `estado_sla` (con `estado_busqueda`) son requeridos en el cuerpo. Ante su ausencia, retorna un código `HTTP 400 Bad Request`.
   - **Respuestas**:
-    * **HTTP 201 Created**: Escritura exitosa en Firestore.
+    * **HTTP 201 Created**: Escritura exitosa en Firestore. Retorna `id_busqueda` (ID de documento autogenerado) y `codigo_busqueda`.
     * **HTTP 500 Internal Server Error**: Error en la base de datos Firestore.
 - **GET /api/v1/busquedas** 🔒 *(Ruta protegida)*: Lista todas las búsquedas almacenadas en Firestore.
   - **Autenticación requerida**: Header `Authorization: Bearer <token_firebase>` (JWT emitido por Firebase Auth).
@@ -509,16 +511,46 @@ Deben configurarse en `Settings → Secrets and variables → Actions` del repos
 * **Seguridad**: `--allow-unauthenticated` a nivel de Cloud Run (la seguridad se gestiona internamente con el middleware JWT `verificarToken`).
 
 -------------------------------------------------------------------------------------------------------------------------
-# DESPLIEGUE NUEVO (CON CI/CD)
+# DESPLIEGUE DE LOCAL A PRUEBAS (NUEVO CON CI/CD)
+Previos: Desarrollos durante el día completados.
 ```bash
 git checkout develop 
 git add .
 git commit -m "chore: implementación de CI/CD, tests unitarios y separación de entornos"
 git push origin develop
 ```
-Verificiones:
-En GitHub, en la rama develop, ver commit reciente. Y en Action, ver el workflow.
-En Google Cloud Run, ver la fecha actualizada del servicio.
+Verificaciones:
+En GitHub 
+  https://github.com/dcastellano-da/azulats-service1
+  En la rama develop, ver commit reciente. 
+  En Action, ver el workflow (de amarillo a verde).
+  Si falla (rojo), analizar el error en el fuente. Falla por saturación de GitHub, Re-run all jobs.
+En Google Cloud Run: 
+  https://console.cloud.google.com/run/overview?facet_url=https:%2F%2Fcloud.google.com%2Ffree&project=azul-ats-1
+  Ver la fecha actualizada del servicio.
+  Ver status ok: 
+    https://azulats-service1-795205053212.us-east1.run.app/ping
+
+
+## DESPLIEGUE DE PRUEBAS A PRODUCCION (NUEVO CON CI/CD)
+Previos: Pruebas de la app en entorno de pruebas, completadas y ok de los usuarios.
+
+En GitHub, crear un PR desde develop a main:
+  En Pull request,botón New pull request. Base: main, compare: develop.  
+  En verde sin conflictos, Create pull request.
+  En Release..., agregar un título representativo, botón Create pull request.
+Ejecutar la fusión:
+  En el PR, botón Merge pull request. Confirm merge. 
+
+Verificaciones: 
+  En GitHub, en la rama main, ver commit reciente hasta ok en verde.
+  Y en Action, ver el workflow (de amarillo a verde).
+  En Google Cloud Run:
+    https://console.cloud.google.com/run/overview?facet_url=https:%2F%2Fcloud.google.com%2Ffree&project=azul-ats-prod
+    Ver la fecha actualizada del servicio. 
+    Puede requerir ver en Cloud Build, el Build history.
+
+    
 
 
 -------------------------------------------------------------------------------------------------------------------------
@@ -642,6 +674,7 @@ A continuación, se detalla una guía rápida de diagnóstico y resolución de e
  Se aseguró la presencia explícita de `id` en la raíz de cada objeto retornado en `GET /api/v1/pipeline`, la serialización en `snake_case` de `resultado_screening`, `fit_score_screening`, `tiene_knockout` y `fecha_modificacion_screening`, la eliminación de filtros/proyecciones de campos en Firestore y la coincidencia estricta entre `claves_conexion.id_candidato` y la clave primaria `id` del documento del candidato en Firestore (con búsqueda de respaldo ante IDs alternativos).
 * **2026-07-25**: Reubicación del campo `canal_ingreso` desde el módulo Pipeline de Entrevistas (`f1_descubrimiento`) hacia el módulo maestro de Candidatos / Postulantes. Ahora `canal_ingreso` es un campo opcional y mutable del perfil del candidato, soportado en creación (B2C e inferencia/override en importación por IA), edición vía `PATCH` y schemas de Zod.
 * **2026-07-24**: Soporte de campos `resumen` (resumen profesional) y `rubros` (sectores e industrias separadas por comas) de forma opcional en los controladores de creación, edición, extracción con inteligencia artificial (Zod schema e importar-ia) y verificación automatizada mediante suite de tests.
+* **2026-08-13**: Refactorización del esquema de IDs en la colección `busquedas` de Firestore (Fase 1 y Fase 2). Desacoplamiento de la clave primaria del documento (ahora obligatoriamente ID autogenerado por Firebase / UUID limpio) del identificador visual de negocio (`codigo_busqueda`). Modificación del endpoint `POST /api/v1/busquedas` para asignar IDs autogenerados y almacenar el código legible original en el campo `codigo_busqueda`. Creación del script de migración `scripts/migrar-busquedas-ids.js` respaldado con validación estricta por Regex (Firestore 20-char alfanumérico o UUID v4) y pruebas automatizadas integradas (`tests/prueba-migracion-busquedas.js`).
 * **2026-07-23**: Rediseño y expansión del Módulo Pipeline de Entrevistas (Mejoras Julio 2026). Separación del bloque `evaluacion` en sub-bloques independientes `f2_evaluacion` (con `puntaje_tecnico`) y `f3_cliente` (con `feedback_cliente`). Reubicación global del descarte operativo al objeto `resolucion`. Flexibilización de agendamientos mediante arreglos dinámicos de `reuniones` en todas las fases (F1-F4) con validación mediante Zod y autogeneración de ID UUIDv4 para reuniones creadas por el servidor. Implementación de una batería de pruebas de integración completa (`tests/prueba-pipeline.js`) y de soporte transparente para retrocompatibilidad con esquemas heredados.
 * **2026-07-20**: Configuración de Vertex AI Cross-Project y actualización de modelo a Gemini 2.5 Flash: Corrección del error 404 configurando de forma aislada e independiente en `src/config/genkit.js` el proyecto dedicado de analítica e IA (`ultra-bearing-492817-k6`) y la región `us-east1` para el SDK de Genkit, separándolo del proyecto transaccional principal (`azul-ats-1`). Se actualizó el modelo de producción a `'vertexai/gemini-2.5-flash'` y se documentaron los requerimientos de permisos IAM de Service Account entre proyectos (`roles/aiplatform.user`).
 * **2026-07-20**: Migración del plugin de Firebase Genkit de la librería deprecada `@genkit-ai/vertexai` a la librería unificada moderna `@genkit-ai/google-genai` para mitigar advertencias de deprecación/eliminación futura y asegurar la compatibilidad con SDK de Google Gen AI, preservando la autenticación nativa por IAM/ADC.
