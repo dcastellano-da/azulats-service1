@@ -6,7 +6,7 @@ Servicio orquestador en Node.js desarrollado para ejecutarse en Google Cloud Run
 
 ### 1. Resumen Ejecutivo y Propósito
 El servicio es un microservicio orquestador backend desarrollado en **Node.js 24 + Express**, concebido para ejecutarse en entorno serverless sobre **Google Cloud Run**. Su propósito central es gestionar el ciclo de vida del reclutamiento y selección de personal mediante tres ejes operativos:
-1. **Captación de Candidatos (Portal B2C y Carga B2B con IA)**
+1. **Captación de Candidatos (Portal B2C, Webhook Inbound Parse SendGrid y Carga B2B con IA)**
 2. **Catálogo de Búsquedas / Vacantes Requeridas (B2B)**
 3. **Pipeline de Selecciones / Tablero Kanban (Relación N:N)**
 
@@ -18,8 +18,8 @@ El servicio es un microservicio orquestador backend desarrollado en **Node.js 24
 * **Almacenamiento de Binarios**: Firebase Storage (`gs://azul-ats-1.firebasestorage.app`).
 * **Inteligencia Artificial / GenAI**: **Firebase Genkit** (`genkit`, `@genkit-ai/google-genai`) usando el modelo `vertexai/gemini-2.5-flash` sobre Google Vertex AI.
 * **Validación de Datos**: **Zod** para estructuración de schemas JSON estrictos y extracción asistida por LLM.
-* **Procesamiento de Binarios**: **Multer** (carga puramente en memoria RAM `< 5MB`, evitando saturar el almacenamiento efímero de Cloud Run).
-* **Seguridad y Control de Accesos**: Middleware JWT `verificarToken` (Firebase Auth) y políticas dinámicas de CORS (`ALLOWED_ORIGINS`).
+* **Procesamiento de Binarios y Correos**: **Multer** (carga en memoria RAM `< 25MB`) y **Mailparser** (`simpleParser`) para la desestructuración de correos en formato Raw MIME (RFC 2822).
+* **Seguridad y Control de Accesos**: Middleware JWT `verificarToken` (Firebase Auth), middleware de autenticación por secreto `validarSendGridSecret` para webhooks, y políticas dinámicas de CORS (`ALLOWED_ORIGINS`).
 * **Analítica & Data Warehousing**: Sincronización continua Firestore → BigQuery mediante la extensión *Stream Firestore to BigQuery*.
 
 ---
@@ -39,6 +39,13 @@ Garantiza el registro y administración de perfiles a través de dos canales:
    * **Inmutabilidad de Seguridad**: Bloquea modificaciones a campos críticos/legales (`url_cv`, `acepta_privacidad`, `origen`, `createdAt`, `id`).
    * **Descarte Operativo**: Manejo de *Soft Delete* marcando `estado_revision: "Descartado"`.
    * Lógica de *Hard Delete* (Derecho al Olvido / RGPD) documentada y comentada para borrado físico en cascada (Storage + Firestore).
+4. **Ingreso por Email - Candidatura Espontánea (`POST /api/v1/webhooks/inbound-cv`)**:
+   * Webhook público interceptador de correos con currículums adjuntos enviados por SendGrid Inbound Parse.
+   * Protegido mediante middleware de token secreto (`validarSendGridSecret` vía query parameter `?secret=...`).
+   * Parsea el contenido MIME en bruto (`req.body.email`) mediante `mailparser`.
+   * **Descarte Elegante**: Si el correo no contiene un adjunto CV válido (PDF, DOC, DOCX), responde `HTTP 200 OK` con `{ status: 'ignored' }` para evitar bucles de reintentos por 72 horas en SendGrid.
+   * Extrae estructuradamente el perfil con **Gemini 2.5 Flash** y aplica fallback automático al correo del remitente (`From`) en caso de que la IA no identifique el email dentro del documento.
+   * Persiste el archivo en Firebase Storage y crea el perfil en Firestore forzando `origen: "Email - Espontáneo"`, `estado_revision: "pendiente"` y `acepta_privacidad: true`.
 
 ---
 
@@ -104,6 +111,7 @@ Cuenta: 795205053212-compute@developer.gserviceaccount.com
 Role: Agent Platform User, BigQuery Data Editor, BigQuery Job User
 
 - **Esquemas y Validación de Datos**: Zod (`zod`) para forzar salida estructurada (JSON Schemas) desde los LLMs
+- **Procesamiento de Correos MIME**: Mailparser (`mailparser` / `simpleParser`) para parsing de mensajes de correo electrónico RFC 2822 recibidos desde webhooks Inbound Parse
 
 ### Patrón Arquitectónico: Escritura Dual (Dual Write)
 Para asegurar que las operaciones transaccionales y analíticas estén sincronizadas de forma consistente y en tiempo real, implementamos un patrón de **Escritura Dual (Dual Write)**. Cada mutación en el sistema se escribe simultáneamente y de forma coordinada en el almacenamiento transaccional (para la operativa diaria en tiempo real) y en el almacén analítico (para propósitos de análisis y reportería). 
@@ -140,9 +148,10 @@ Para mitigar accesos indebidos a los endpoints B2C y al almacenamiento de archiv
 
 > [!WARNING]
 > **Advertencia crítica sobre el formato de las variables:**
-> * Las variables `ALLOWED_ORIGINS` (en la configuración de Google Cloud Run) y `NEXT_PUBLIC_ATS_API_URL` (en el frontend Next.js) deben ingresarse estrictamente como texto plano.
+> * Las variables `ALLOWED_ORIGINS` (en la configuración de Google Cloud Run) y `NEXT_PUBLIC_ATS_API_URL` (en el frontend Next.js) deben ingresarse strictly como texto plano.
 > * Está terminantemente prohibido utilizar barras diagonales finales (`/`) o caracteres de Markdown (como corchetes `[]` o paréntesis `()`). El uso de formatos incorrectos provocará fallas de enrutamiento y bloqueos en las políticas de seguridad.
 > * En ambientes de **Preview**, la URL dinámica temporal generada debe registrarse anexándola a la variable de entorno `ALLOWED_ORIGINS` separada por comas para evitar que las peticiones de origen cruzado sean rechazadas por CORS.
+> * La variable `SENDGRID_INBOUND_WEBHOOK_SECRET` define el token secreto requerido para autenticar las peticiones `POST` recibidas en el webhook Inbound Parse (`/api/v1/webhooks/inbound-cv?secret=...`).
 
 ### Esquema Firestore & Sincronización Analítica con BigQuery
 Para recopilar la información y modelar análisis posteriores, se asume la configuración de la extensión oficial **Stream Firestore to BigQuery** para la colección de candidatos.
@@ -419,6 +428,23 @@ Para recopilar la información y modelar análisis posteriores, se asume la conf
   - **Respuestas**:
     * `HTTP 200 OK`: Eliminación exitosa del vínculo.
     * `HTTP 404 Not Found`: No existe registro en el pipeline con ese ID.
+- **POST /api/v1/webhooks/inbound-cv**: Endpoint público interceptador de correos entrantes enviando candidaturas espontáneas vía SendGrid Inbound Parse ("POST raw MIME message").
+  - **Autenticación requerida**: Query Parameter `?secret=YOUR_WEBHOOK_SECRET` (coincidente con la variable de entorno `SENDGRID_INBOUND_WEBHOOK_SECRET`).
+    * `HTTP 401 Unauthorized`: Si el secreto es incorrecto o ausente.
+  - **Cabeceras obligatorias**: `Content-Type: multipart/form-data`
+  - **Cuerpo de la Petición**: Form-data enviado por SendGrid conteniendo el mensaje completo RFC 2822 en el campo `email`.
+  - **Flujo de Ejecución**:
+    1. Parsea el mensaje MIME con `mailparser`.
+    2. Extrae la dirección del remitente (`From`).
+    3. Filtra los adjuntos buscando archivos CV (`.pdf`, `.doc`, `.docx`).
+    4. **Sin CV válido**: Retorna `HTTP 200 OK` con `{ status: "ignored", message: "..." }` para evitar reintentos continuos de SendGrid.
+    5. **Con CV válido**: Procesa con **Genkit + Gemini 2.5 Flash**. Si la IA no extrae el email del candidato, aplica fallback al email del remitente.
+    6. Carga el CV a Firebase Storage (`cvs/<UUID>_<nombre>`) y guarda en Firestore (`postulantes/<UUID>`) asignando `origen: "Email - Espontáneo"`, `estado_revision: "pendiente"`, `acepta_privacidad: true` y `canal_ingreso: "Email"`.
+  - **Respuestas**:
+    * `HTTP 201 Created`: Candidatura espontánea registrada con éxito.
+    * `HTTP 200 OK`: Correo recibido y procesado pero ignorado (sin adjunto CV válido).
+    * `HTTP 401 Unauthorized`: Token secreto de webhook inválido o ausente.
+    * `HTTP 500 Internal Server Error`: Error al procesar el correo, subir a Storage o guardar en Firestore (con rollback automático de Storage).
 
 
 ### Estrategia de Observabilidad y Logs Estratégicos
@@ -543,7 +569,7 @@ Ejecutar la fusión:
   En el PR, botón Merge pull request. Confirm merge. 
 
 Verificaciones: 
-  En GitHub, en la rama main, ver commit reciente hasta ok en verde.
+  En GitHub, Actions, en la rama main, ver commit reciente hasta ok en verde.
   Y en Action, ver el workflow (de amarillo a verde).
   En Google Cloud Run:
     https://console.cloud.google.com/run/overview?facet_url=https:%2F%2Fcloud.google.com%2Ffree&project=azul-ats-prod
@@ -601,6 +627,7 @@ Ejecutar las pruebas unitarias:
 ```bash
 npm test
 ```
+
 
 Para probar la base Firestore local, (no usar, para desarrollo y prueba usamos la del Firebase Cloud):
 ```bash
@@ -670,6 +697,7 @@ A continuación, se detalla una guía rápida de diagnóstico y resolución de e
 --------------------------------------------------------------------------------------------------------------------------------------
 # Log de Cambios (Changelog)
 
+* **2026-08-18**: Implementación del alcance "Emails Inbound: Candidatura Espontánea (Bandeja General)" bajo arquitectura de Integración Contextual (Just-in-Time). Creación del endpoint público `POST /api/v1/webhooks/inbound-cv` protegido por el middleware de seguridad `validarSendGridSecret` (`?secret=...`). Procesamiento de mensajes en formato Raw MIME (RFC 2822) mediante la librería `mailparser` (`simpleParser`). Descarte silencioso con `HTTP 200 OK` (`status: 'ignored'`) ante correos sin adjunto CV válido (PDF/DOC/DOCX) para evitar loops de reintentos por 72h de SendGrid. Extracción de metadatos del CV mediante **Genkit (Gemini 2.5 Flash)** con fallback automático al email del remitente (`From`). Persistencia en Firebase Storage y Cloud Firestore (colección `postulantes`) forzando `origen: "Email - Espontáneo"`, `estado_revision: "pendiente"` y `acepta_privacidad: true` con rollback transaccional anti-huérfanos. Incorporación de suite de pruebas unitarias (`tests/unit/webhooks.test.js`).
 * **2026-08-05**: Separación de entornos Staging/Producción con CI/CD automatizado. Implementación de dos workflows de GitHub Actions (`.github/workflows/deploy-staging.yml` y `deploy-production.yml`) que despliegan automáticamente en `azul-ats-1` (Staging) y `azul-ats-prod` (Producción) al hacer push a `develop` y `main` respectivamente. Refactorización del middleware CORS en `index.js` con lógica dinámica por entorno: modo producción estricto (whitelist exacta: `digitalagil.es` y `www.digitalagil.es`) y modo staging con Regex que autoriza automáticamente URLs de preview de Firebase App Hosting (`*.hosted.app`). Incorporación de pruebas unitarias aisladas con Jest (`tests/unit/cors.test.js`, `tests/unit/env.test.js`) como barrera de contención bloqueante en el pipeline CI/CD. Corrección del comentario de región en `Dockerfile` (`europe-southwest1` → `us-east1`). Actualización de la estrategia de branching a flujo de tres niveles (`feature/* → develop → main`).
  Se aseguró la presencia explícita de `id` en la raíz de cada objeto retornado en `GET /api/v1/pipeline`, la serialización en `snake_case` de `resultado_screening`, `fit_score_screening`, `tiene_knockout` y `fecha_modificacion_screening`, la eliminación de filtros/proyecciones de campos en Firestore y la coincidencia estricta entre `claves_conexion.id_candidato` y la clave primaria `id` del documento del candidato en Firestore (con búsqueda de respaldo ante IDs alternativos).
 * **2026-07-25**: Reubicación del campo `canal_ingreso` desde el módulo Pipeline de Entrevistas (`f1_descubrimiento`) hacia el módulo maestro de Candidatos / Postulantes. Ahora `canal_ingreso` es un campo opcional y mutable del perfil del candidato, soportado en creación (B2C e inferencia/override en importación por IA), edición vía `PATCH` y schemas de Zod.
