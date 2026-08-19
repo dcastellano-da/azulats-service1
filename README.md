@@ -423,6 +423,26 @@ Para recopilar la información y modelar análisis posteriores, se asume la conf
     * `HTTP 200 OK`: Evaluación procesada exitosamente. Devuelve el documento de pipeline actualizado.
     * `HTTP 400 Bad Request`: Candidato sin CV (`url_cv` ausente) o claves de conexión inválidas.
     * `HTTP 404 Not Found`: Vínculo de pipeline, candidato o búsqueda inexistente.
+- **POST /api/v1/pipeline/:id/analizar-transcripcion** 🔒 *(Ruta protegida)*: Procesa la transcripción de una entrevista de screening enviada en memoria (PDF, DOC, DOCX, TXT <5MB) mediante triangulación multimodal con **Vertex AI (Gemini 2.5 Flash)** frente al CV original y los criterios de la búsqueda.
+  - **Autenticación requerida**: Header `Authorization: Bearer <token_firebase>` (JWT de Firebase).
+  - **Cabeceras obligatorias**: `Content-Type: multipart/form-data`
+  - **Parámetros del cuerpo**: Campo `transcripcion` conteniendo el archivo binario.
+  - **Flujo de Ejecución**:
+    1. Procesa la transcripción en memoria RAM (Multer MemoryStorage) sin guardarla en disco ni en Firebase Storage.
+    2. Descarga el CV original desde Firebase Storage (`postulantes.url_cv`).
+    3. Recupera los `criterios_screening` configurados en la búsqueda asociada.
+    4. Invoca **Genkit + Gemini 2.5 Flash** forzando respuesta estructurada validada por **Zod Schema**:
+       - `experiencia_consolidada`: Resumen de trayectoria real validada.
+       - `alineacion_motivadores`: Análisis conductual y encaje cultural.
+       - `pretension_economica_condiciones`: Bandas salariales, disponibilidad y modalidad.
+       - `proximos_pasos`: Arreglo de tareas/action items del cierre.
+       - `auditoria_veracidad`: Inconsistencias detectadas entre CV y entrevista oral, y confirmaciones de fortalezas.
+       - `fecha_analisis`: Timestamp ISO 8601 del momento de generación.
+    5. Persiste el informe en `pipeline_entrevistas` bajo la propiedad `f2_evaluacion.informe_entrevista_ia`.
+  - **Respuestas**:
+    * `HTTP 200 OK`: Transcripción analizada e informe de entrevista guardado con éxito.
+    * `HTTP 400 Bad Request`: Archivo faltante o de formato no permitido, candidato sin CV registrado (`url_cv` ausente).
+    * `HTTP 404 Not Found`: Vínculo de pipeline, candidato o búsqueda inexistente.
 - **DELETE /api/v1/pipeline/:id** 🔒 *(Ruta protegida)*: Desvincula físicamente a un candidato de una vacante (eliminando el registro de pipeline) sin alterar los maestros correspondientes del candidato o de la búsqueda.
   - **Autenticación requerida**: Header `Authorization: Bearer <token_firebase>` (JWT de Firebase).
   - **Respuestas**:
@@ -697,6 +717,7 @@ A continuación, se detalla una guía rápida de diagnóstico y resolución de e
 --------------------------------------------------------------------------------------------------------------------------------------
 # Log de Cambios (Changelog)
 
+* **2026-08-19**: Implementación del Módulo de Análisis Inteligente de Transcripciones de Entrevistas por IA (Smart Scorecard). Creación del endpoint protegido `POST /api/v1/pipeline/:id/analizar-transcripcion` con Multer en RAM (PDF/DOC/DOCX/TXT <5MB) sin persistencia física en Storage ni en disco. Triangulación multimodal directa mediante Vertex AI (Gemini 2.5 Flash) procesando en Base64 el CV original y la transcripción subida. Salida forzada por Zod (`InformeEntrevistaSchema`) y persistencia en `pipeline_entrevistas` bajo `f2_evaluacion.informe_entrevista_ia` con timestamp `fecha_analisis`. Extensión a `PATCH /api/v1/pipeline/:id` para edición manual *Human-in-the-Loop*. Incorporación de pruebas unitarias (`tests/unit/pipeline-transcripcion.test.js`) e integración E2E (`tests/prueba-analizar-transcripcion.js`), cumpliendo con la Política de Cero Regresiones.
 * **2026-08-18**: Implementación del alcance "Emails Inbound: Candidatura Espontánea (Bandeja General)" bajo arquitectura de Integración Contextual (Just-in-Time). Creación del endpoint público `POST /api/v1/webhooks/inbound-cv` protegido por el middleware de seguridad `validarSendGridSecret` (`?secret=...`). Procesamiento de mensajes en formato Raw MIME (RFC 2822) mediante la librería `mailparser` (`simpleParser`). Descarte silencioso con `HTTP 200 OK` (`status: 'ignored'`) ante correos sin adjunto CV válido (PDF/DOC/DOCX) para evitar loops de reintentos por 72h de SendGrid. Extracción de metadatos del CV mediante **Genkit (Gemini 2.5 Flash)** con fallback automático al email del remitente (`From`). Persistencia en Firebase Storage y Cloud Firestore (colección `postulantes`) forzando `origen: "Email - Espontáneo"`, `estado_revision: "pendiente"` y `acepta_privacidad: true` con rollback transaccional anti-huérfanos. Incorporación de suite de pruebas unitarias (`tests/unit/webhooks.test.js`).
 * **2026-08-05**: Separación de entornos Staging/Producción con CI/CD automatizado. Implementación de dos workflows de GitHub Actions (`.github/workflows/deploy-staging.yml` y `deploy-production.yml`) que despliegan automáticamente en `azul-ats-1` (Staging) y `azul-ats-prod` (Producción) al hacer push a `develop` y `main` respectivamente. Refactorización del middleware CORS en `index.js` con lógica dinámica por entorno: modo producción estricto (whitelist exacta: `digitalagil.es` y `www.digitalagil.es`) y modo staging con Regex que autoriza automáticamente URLs de preview de Firebase App Hosting (`*.hosted.app`). Incorporación de pruebas unitarias aisladas con Jest (`tests/unit/cors.test.js`, `tests/unit/env.test.js`) como barrera de contención bloqueante en el pipeline CI/CD. Corrección del comentario de región en `Dockerfile` (`europe-southwest1` → `us-east1`). Actualización de la estrategia de branching a flujo de tres niveles (`feature/* → develop → main`).
  Se aseguró la presencia explícita de `id` en la raíz de cada objeto retornado en `GET /api/v1/pipeline`, la serialización en `snake_case` de `resultado_screening`, `fit_score_screening`, `tiene_knockout` y `fecha_modificacion_screening`, la eliminación de filtros/proyecciones de campos en Firestore y la coincidencia estricta entre `claves_conexion.id_candidato` y la clave primaria `id` del documento del candidato en Firestore (con búsqueda de respaldo ante IDs alternativos).

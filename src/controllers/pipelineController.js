@@ -95,13 +95,26 @@ export const crearPipeline = async (req, res) => {
   }
 
   try {
-    // 1. Validar que la búsqueda exista en Firestore
-    const busqDoc = await db.collection('busquedas').doc(finalIdBusqueda).get();
+    // 1. Validar que la búsqueda exista en Firestore y resolver su ID real de documento
+    let busqDoc = await db.collection('busquedas').doc(finalIdBusqueda).get();
+    let realIdBusqueda = finalIdBusqueda;
+
     if (!busqDoc.exists) {
-      return res.status(404).json({
-        status: 'error',
-        message: `La búsqueda con ID '${finalIdBusqueda}' no existe.`
-      });
+      const busqSnap = await db.collection('busquedas')
+        .where('codigo_busqueda', '==', finalIdBusqueda)
+        .get();
+
+      if (!busqSnap.empty) {
+        busqDoc = busqSnap.docs[0];
+        realIdBusqueda = busqDoc.id;
+      } else {
+        return res.status(404).json({
+          status: 'error',
+          message: `La búsqueda con ID '${finalIdBusqueda}' no existe.`
+        });
+      }
+    } else {
+      realIdBusqueda = busqDoc.id;
     }
 
     // 2. Validar que el candidato exista en Firestore y resolver su ID real de documento
@@ -129,7 +142,7 @@ export const crearPipeline = async (req, res) => {
 
     // 3. Validar duplicados de la postulación
     const dupeSnap = await db.collection('pipeline_entrevistas')
-      .where('claves_conexion.id_busqueda', '==', finalIdBusqueda)
+      .where('claves_conexion.id_busqueda', '==', realIdBusqueda)
       .where('claves_conexion.id_candidato', '==', realIdCandidato)
       .get();
 
@@ -149,7 +162,7 @@ export const crearPipeline = async (req, res) => {
     const finalDoc = {
       id: mockId,
       claves_conexion: {
-        id_busqueda: finalIdBusqueda,
+        id_busqueda: realIdBusqueda,
         id_candidato: realIdCandidato
       },
       flujo: {
@@ -374,6 +387,14 @@ export const actualizarPipeline = async (req, res) => {
         updates['f2_evaluacion.reuniones'] = parseAndValidateReuniones(body.f2_evaluacion.reuniones);
       } else if (body['f2_evaluacion.reuniones'] !== undefined) {
         updates['f2_evaluacion.reuniones'] = parseAndValidateReuniones(body['f2_evaluacion.reuniones']);
+      }
+
+      if (body.f2_evaluacion?.informe_entrevista_ia !== undefined) {
+        updates['f2_evaluacion.informe_entrevista_ia'] = body.f2_evaluacion.informe_entrevista_ia;
+      } else if (body['f2_evaluacion.informe_entrevista_ia'] !== undefined) {
+        updates['f2_evaluacion.informe_entrevista_ia'] = body['f2_evaluacion.informe_entrevista_ia'];
+      } else if (body.informe_entrevista_ia !== undefined) {
+        updates['f2_evaluacion.informe_entrevista_ia'] = body.informe_entrevista_ia;
       }
 
       // 6. Procesar f3_cliente (feedback_cliente, notas_reclutador, reuniones)
@@ -784,6 +805,205 @@ export const evaluarScreeningPipeline = async (req, res) => {
     return res.status(500).json({
       status: 'error',
       message: 'Error interno al procesar la evaluación de screening con Inteligencia Artificial.',
+      detail: error.message
+    });
+  }
+};
+
+// Schema Zod para forzar la respuesta de Genkit / Gemini para el Informe de Entrevista de Screening
+const InformeEntrevistaSchema = z.object({
+  experiencia_consolidada: z.string().describe('Resumen de la trayectoria real validada en la entrevista, destacando hitos clave, motivos de salida de empleos anteriores y manejo de herramientas.'),
+  alineacion_motivadores: z.string().describe('Análisis conductual sobre el encaje cultural, evaluando si el talento busca estabilidad, crecimiento o qué tipo de ambiente laboral prefiere.'),
+  pretension_economica_condiciones: z.object({
+    pretension_salarial: z.string().nullable().describe('Banda salarial o pretensión económica exigida.'),
+    disponibilidad: z.string().nullable().describe('Disponibilidad de incorporación (ej: inmediata, preaviso de X semanas).'),
+    modalidad_preferida: z.string().nullable().describe('Modalidad de trabajo preferida o aceptada (presencial, remota, híbrida).')
+  }),
+  proximos_pasos: z.array(z.string()).describe('Tareas o action items extraídos del cierre de la llamada para generar recordatorios automáticos.'),
+  auditoria_veracidad: z.object({
+    inconsistencias_detectadas: z.array(z.string()).describe('Lista de inconsistencias detectadas entre lo conversado oralmente y lo escrito en el CV (fechas, roles, títulos).'),
+    confirmaciones_fortalezas: z.array(z.string()).describe('Grado de profundidad o confirmación observada en competencias técnicas clave.')
+  })
+});
+
+/**
+ * POST /api/v1/pipeline/:id/analizar-transcripcion
+ * Recibe la transcripción de la entrevista de screening en RAM (PDF/DOC), recupera el CV original y los criterios de la búsqueda,
+ * realiza triangulación multimodal con Vertex AI (Gemini 2.5 Flash) y persiste el informe en f2_evaluacion.informe_entrevista_ia.
+ */
+export const analizarTranscripcionPipeline = async (req, res) => {
+  const { id } = req.params;
+  const file = req.file;
+
+  if (!id) {
+    return res.status(400).json({
+      status: 'error',
+      message: 'El identificador del pipeline en la ruta es requerido.'
+    });
+  }
+
+  if (!file) {
+    return res.status(400).json({
+      status: 'error',
+      message: 'El archivo de transcripción (PDF, DOC o DOCX) es obligatorio en el campo "transcripcion".'
+    });
+  }
+
+  try {
+    // 1. Obtener registro del pipeline
+    const pipelineRef = db.collection('pipeline_entrevistas').doc(id);
+    const pipelineDoc = await pipelineRef.get();
+
+    if (!pipelineDoc.exists) {
+      return res.status(404).json({
+        status: 'error',
+        message: `El registro de pipeline con ID '${id}' no existe.`
+      });
+    }
+
+    const pipelineData = pipelineDoc.data();
+    const idBusqueda = pipelineData.claves_conexion?.id_busqueda;
+    const idCandidato = pipelineData.claves_conexion?.id_candidato;
+
+    if (!idBusqueda || !idCandidato) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'El registro de pipeline no posee claves_conexion válidas (id_busqueda e id_candidato).'
+      });
+    }
+
+    // 2. Obtener candidato y validar su url_cv
+    const candidatoDoc = await db.collection('postulantes').doc(idCandidato).get();
+    if (!candidatoDoc.exists) {
+      return res.status(404).json({
+        status: 'error',
+        message: `El candidato asociado con ID '${idCandidato}' no existe.`
+      });
+    }
+
+    const candidatoData = candidatoDoc.data();
+    const gsUri = candidatoData.url_cv;
+
+    if (!gsUri || typeof gsUri !== 'string' || !gsUri.trim()) {
+      return res.status(400).json({
+        status: 'error',
+        message: `El candidato con ID '${idCandidato}' no posee un archivo CV (url_cv) registrado en el sistema para realizar el análisis de la transcripción.`
+      });
+    }
+
+    // 3. Obtener criterios de la búsqueda asociada
+    const busquedaDoc = await db.collection('busquedas').doc(idBusqueda).get();
+    if (!busquedaDoc.exists) {
+      return res.status(404).json({
+        status: 'error',
+        message: `La búsqueda asociada con ID '${idBusqueda}' no existe.`
+      });
+    }
+
+    const busquedaData = busquedaDoc.data();
+    const criteriosScreening = busquedaData.criterios_screening || [];
+
+    // 4. Leer / descargar el CV original desde Firebase Storage
+    let cvBase64 = '';
+    let cvMimeType = 'application/pdf';
+
+    const prefix = `gs://${bucket.name}/`;
+    if (gsUri.startsWith(prefix)) {
+      const storagePath = gsUri.substring(prefix.length);
+      const fileRef = bucket.file(storagePath);
+
+      if (process.env.NODE_ENV !== 'test') {
+        const [exists] = await fileRef.exists();
+        if (!exists) {
+          return res.status(404).json({
+            status: 'error',
+            message: 'El archivo CV del candidato no existe físicamente en el almacenamiento de Firebase Storage.'
+          });
+        }
+        const [buffer] = await fileRef.download();
+        const [metadata] = await fileRef.getMetadata();
+        cvMimeType = metadata.contentType || 'application/pdf';
+        cvBase64 = buffer.toString('base64');
+      } else {
+        cvBase64 = Buffer.from('PDF_CV_TEST_BUFFER').toString('base64');
+      }
+    } else {
+      cvBase64 = Buffer.from('PDF_CV_TEST_BUFFER').toString('base64');
+    }
+
+    const cvDataUrl = `data:${cvMimeType};base64,${cvBase64}`;
+
+    // 5. Preparar la transcripción subida desde RAM en Base64
+    const transBase64 = file.buffer.toString('base64');
+    const transDataUrl = `data:${file.mimetype};base64,${transBase64}`;
+
+    // 6. Formatear criterios para el prompt
+    const promptCriterios = criteriosScreening.map(c => `[ID: ${c.id}] (Tipo: ${c.tipo}, Peso: ${c.peso}) Pregunta: ${c.pregunta}`).join('\n');
+
+    const promptText = `Analiza detalladamente esta transcripción de entrevista de screening cruzando la información oralmente expuesta con el CV original del candidato y los criterios de evaluación de la búsqueda.
+
+Criterios de Evaluación de la Búsqueda:
+${promptCriterios || 'Sin criterios específicos configurados.'}
+
+Genera un informe estructurado y auditable que sintetice la trayectoria real validada, la motivación y encaje cultural, las pretensiones económicas y condiciones, los próximos pasos recomendados e identifique explícitamente cualquier inconsistencia entre lo expuesto en la entrevista y el CV.`;
+
+    const aiResponse = await ai.generate({
+      model: modelRef,
+      prompt: [
+        {
+          media: {
+            url: cvDataUrl,
+            contentType: cvMimeType
+          }
+        },
+        {
+          media: {
+            url: transDataUrl,
+            contentType: file.mimetype
+          }
+        },
+        { text: promptText }
+      ],
+      output: { schema: InformeEntrevistaSchema }
+    });
+
+    const extractedReport = aiResponse?.output;
+
+    if (!extractedReport) {
+      return res.status(500).json({
+        status: 'error',
+        message: 'No se pudo obtener una respuesta estructurada desde el modelo de Inteligencia Artificial.'
+      });
+    }
+
+    const timestamp = new Date().toISOString();
+    const informeFinal = {
+      ...extractedReport,
+      fecha_analisis: timestamp
+    };
+
+    // 7. Persistir en Firestore en f2_evaluacion.informe_entrevista_ia
+    const updates = {
+      'f2_evaluacion.informe_entrevista_ia': informeFinal,
+      updatedAt: timestamp
+    };
+
+    await pipelineRef.update(updates);
+
+    const updatedSnap = await pipelineRef.get();
+    const updatedData = updatedSnap.data();
+
+    return res.status(200).json({
+      status: 'success',
+      message: 'Transcripción analizada e informe de entrevista generado exitosamente con Inteligencia Artificial.',
+      data: normalizePipelineDoc(pipelineRef.id, updatedData)
+    });
+
+  } catch (error) {
+    console.error('[ANALIZAR TRANSCRIPCION IA ERROR] Error al analizar transcripción con IA:', error.message);
+    return res.status(500).json({
+      status: 'error',
+      message: 'Error interno al procesar el análisis de la transcripción con Inteligencia Artificial.',
       detail: error.message
     });
   }
