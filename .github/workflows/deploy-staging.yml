@@ -62,5 +62,5 @@ jobs:
             --region us-east1 \
             --project ${{ secrets.GCP_PROJECT_STAGING }} \
             --allow-unauthenticated \
-            --set-env-vars NODE_ENV=staging,GOOGLE_CLOUD_PROJECT=${{ secrets.GOOGLE_CLOUD_PROJECT_STAGING }},GCLOUD_PROJECT=${{ secrets.GOOGLE_CLOUD_PROJECT_STAGING }},FIREBASE_STORAGE_BUCKET=${{ secrets.FIREBASE_STORAGE_BUCKET_STAGING }},BIGQUERY_PROJECT_ID=${{ secrets.BIGQUERY_PROJECT_ID }} \
+            --set-env-vars NODE_ENV=staging,GOOGLE_CLOUD_PROJECT=${{ secrets.GOOGLE_CLOUD_PROJECT_STAGING }},GCLOUD_PROJECT=${{ secrets.GOOGLE_CLOUD_PROJECT_STAGING }},FIREBASE_STORAGE_BUCKET=${{ secrets.FIREBASE_STORAGE_BUCKET_STAGING }},BIGQUERY_PROJECT_ID=${{ secrets.BIGQUERY_PROJECT_ID }},SENDGRID_INBOUND_WEBHOOK_SECRET=${{ secrets.SENDGRID_INBOUND_WEBHOOK_SECRET_STAGING }} \
             --quiet
