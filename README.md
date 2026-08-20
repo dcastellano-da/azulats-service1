@@ -542,6 +542,8 @@ Deben configurarse en `Settings → Secrets and variables → Actions` del repos
 | `FIREBASE_STORAGE_BUCKET_STAGING` | Staging | `azul-ats-1.firebasestorage.app` |
 | `FIREBASE_STORAGE_BUCKET_PRODUCTION` | Producción | Bucket del Proyecto B |
 | `ALLOWED_ORIGINS_PRODUCTION` | Producción | `https://digitalagil.es,https://www.digitalagil.es` |
+| `SENDGRID_INBOUND_WEBHOOK_SECRET_STAGING` | Staging | Token secreto para autenticar webhook SendGrid Inbound Parse |
+| `SENDGRID_INBOUND_WEBHOOK_SECRET_PRODUCTION` | Producción | Token secreto para autenticar webhook SendGrid Inbound Parse |
 | `BIGQUERY_PROJECT_ID` | Ambos | `ultra-bearing-492817-k6` |
 
 > [!WARNING]
@@ -583,10 +585,8 @@ Previos: Pruebas de la app en entorno de pruebas, completadas y ok de los usuari
 
 En GitHub, crear un PR desde develop a main:
   En Pull request,botón New pull request. Base: main, compare: develop.  
-  En verde sin conflictos, Create pull request.
-  En Release..., agregar un título representativo, botón Create pull request.
-Ejecutar la fusión:
-  En el PR, botón Merge pull request. Confirm merge. 
+  En verde sin conflictos, Create pull request. 
+  Verificando conflictos, puede demorar, actualizar la página. Botón Merge pull request, confirmar.
 
 Verificaciones: 
   En GitHub, Actions, en la rama main, ver commit reciente hasta ok en verde.
@@ -621,7 +621,7 @@ gcloud run deploy azulats-service1 \
   --source . \
   --region us-east1 \
   --allow-unauthenticated \
-  --set-env-vars NODE_ENV=staging,GOOGLE_CLOUD_PROJECT=azul-ats-1,BIGQUERY_PROJECT_ID=ultra-bearing-492817-k6,FIREBASE_STORAGE_BUCKET=azul-ats-1.firebasestorage.app
+  --set-env-vars NODE_ENV=staging,GOOGLE_CLOUD_PROJECT=azul-ats-1,BIGQUERY_PROJECT_ID=ultra-bearing-492817-k6,FIREBASE_STORAGE_BUCKET=azul-ats-1.firebasestorage.app,SENDGRID_INBOUND_WEBHOOK_SECRET=<SECRET_STAGING>
 
 #    PRODUCCIÓN:
 gcloud run deploy azulats-service1 \
@@ -629,7 +629,7 @@ gcloud run deploy azulats-service1 \
   --region us-east1 \
   --project azul-ats-prod \
   --allow-unauthenticated \
-  --set-env-vars NODE_ENV=production,GOOGLE_CLOUD_PROJECT=azul-ats-prod,BIGQUERY_PROJECT_ID=ultra-bearing-492817-k6,FIREBASE_STORAGE_BUCKET=<BUCKET_PROD>,ALLOWED_ORIGINS=https://digitalagil.es,https://www.digitalagil.es
+  --set-env-vars NODE_ENV=production,GOOGLE_CLOUD_PROJECT=azul-ats-prod,BIGQUERY_PROJECT_ID=ultra-bearing-492817-k6,FIREBASE_STORAGE_BUCKET=<BUCKET_PROD>,ALLOWED_ORIGINS=https://digitalagil.es,https://www.digitalagil.es,SENDGRID_INBOUND_WEBHOOK_SECRET=<SECRET_PROD>
 ```
 
 > **Nota**: el comando `--source .` activa Cloud Build en remoto, que ejecuta el `Dockerfile` incluido en el repositorio. Las variables sensibles no se incluyen en la imagen — solo se inyectan en el entorno de ejecución del contenedor.
@@ -716,6 +716,8 @@ A continuación, se detalla una guía rápida de diagnóstico y resolución de e
 
 --------------------------------------------------------------------------------------------------------------------------------------
 # Log de Cambios (Changelog)
+
+* **2026-08-20**: Actualización de los workflows automatizados de CI/CD en GitHub Actions ([`.github/workflows/deploy-staging.yml`](.github/workflows/deploy-staging.yml) y [`deploy-production.yml`](.github/workflows/deploy-production.yml)). Inyección del secreto `SENDGRID_INBOUND_WEBHOOK_SECRET` a nivel de Google Cloud Run mediante la extracción de `SENDGRID_INBOUND_WEBHOOK_SECRET_STAGING` y `SENDGRID_INBOUND_WEBHOOK_SECRET_PRODUCTION` desde GitHub Secrets en los despliegues de Staging y Producción respectivamente. Actualización de la documentación en `README.md`.
 
 * **2026-08-19**: Implementación del Módulo de Análisis Inteligente de Transcripciones de Entrevistas por IA (Smart Scorecard). Creación del endpoint protegido `POST /api/v1/pipeline/:id/analizar-transcripcion` con Multer en RAM (PDF/DOC/DOCX/TXT <5MB) sin persistencia física en Storage ni en disco. Triangulación multimodal directa mediante Vertex AI (Gemini 2.5 Flash) procesando en Base64 el CV original y la transcripción subida. Salida forzada por Zod (`InformeEntrevistaSchema`) y persistencia en `pipeline_entrevistas` bajo `f2_evaluacion.informe_entrevista_ia` con timestamp `fecha_analisis`. Extensión a `PATCH /api/v1/pipeline/:id` para edición manual *Human-in-the-Loop*. Incorporación de pruebas unitarias (`tests/unit/pipeline-transcripcion.test.js`) e integración E2E (`tests/prueba-analizar-transcripcion.js`), cumpliendo con la Política de Cero Regresiones.
 * **2026-08-18**: Implementación del alcance "Emails Inbound: Candidatura Espontánea (Bandeja General)" bajo arquitectura de Integración Contextual (Just-in-Time). Creación del endpoint público `POST /api/v1/webhooks/inbound-cv` protegido por el middleware de seguridad `validarSendGridSecret` (`?secret=...`). Procesamiento de mensajes en formato Raw MIME (RFC 2822) mediante la librería `mailparser` (`simpleParser`). Descarte silencioso con `HTTP 200 OK` (`status: 'ignored'`) ante correos sin adjunto CV válido (PDF/DOC/DOCX) para evitar loops de reintentos por 72h de SendGrid. Extracción de metadatos del CV mediante **Genkit (Gemini 2.5 Flash)** con fallback automático al email del remitente (`From`). Persistencia en Firebase Storage y Cloud Firestore (colección `postulantes`) forzando `origen: "Email - Espontáneo"`, `estado_revision: "pendiente"` y `acepta_privacidad: true` con rollback transaccional anti-huérfanos. Incorporación de suite de pruebas unitarias (`tests/unit/webhooks.test.js`).
