@@ -443,6 +443,24 @@ Para recopilar la información y modelar análisis posteriores, se asume la conf
     * `HTTP 200 OK`: Transcripción analizada e informe de entrevista guardado con éxito.
     * `HTTP 400 Bad Request`: Archivo faltante o de formato no permitido, candidato sin CV registrado (`url_cv` ausente).
     * `HTTP 404 Not Found`: Vínculo de pipeline, candidato o búsqueda inexistente.
+- **POST /api/v1/pipeline/:id/analizar-personalidad** 🔒 *(Ruta protegida)*: Analiza e ingiere los resultados de tests de personalidad (capturas de pantalla de 16Personalities u otros en PNG/JPG/WEBP <5MB) mediante inferencia multimodal con **Vertex AI (Gemini 2.5 Flash)** en **Cognitive Fit Vision (CFV) - V3**.
+  - **Autenticación requerida**: Header `Authorization: Bearer <token_firebase>` (JWT de Firebase).
+  - **Cabeceras obligatorias**: `Content-Type: multipart/form-data`
+  - **Parámetros del cuerpo**: Campo `imagen` (con fallback automático a `file`) conteniendo la captura del test de personalidad.
+  - **Flujo de Ejecución**:
+    1. Procesa la imagen en memoria RAM (Multer MemoryStorage con filtro estricto de formatos de imagen PNG/JPG/JPEG/WEBP <5MB) convirtiéndola a Base64 y descartando el buffer físico.
+    2. Recupera el registro del pipeline y la información de la búsqueda asociada (`busquedas`: `titulo_busqueda`, `descripcion`, `criterios_screening`).
+    3. Triangula el contexto mediante **Genkit + Gemini 2.5 Flash** forzando respuesta estructurada validada por **Zod Schema** (`TestPersonalidadSchema`):
+       - `arquetipo_codigo`: Código de 4 o 5 letras (ej: "ENTJ-A", "INFP-T").
+       - `arquetipo_nombre`: Título o nombre del perfil (ej: "Comandante", "Mediador").
+       - `dimensiones`: Objeto con 5 métricas numéricas acotadas entre 0 y 100 (`dim_mente`, `dim_energia`, `dim_naturaleza`, `dim_tactica`, `dim_identidad`).
+       - `analisis_encaje`: Argumentación breve del encaje cultural/conductual para el puesto.
+    4. Inyecta automáticamente el timestamp ISO 8601 `fecha_analisis` generado por el servidor backend.
+    5. Persiste el resultado en `pipeline_entrevistas` bajo `f2_evaluacion.test_personalidad`. Soporta edición manual *Human-in-the-Loop* vía `PATCH /api/v1/pipeline/:id`.
+  - **Respuestas**:
+    * `HTTP 200 OK`: Test de personalidad analizado e integrado exitosamente.
+    * `HTTP 400 Bad Request`: Formato no permitido (ej. PDF/TXT rechazada con error estricto de imagen), archivo faltante o claves de conexión inválidas.
+    * `HTTP 404 Not Found`: Vínculo de pipeline o búsqueda inexistente.
 - **DELETE /api/v1/pipeline/:id** 🔒 *(Ruta protegida)*: Desvincula físicamente a un candidato de una vacante (eliminando el registro de pipeline) sin alterar los maestros correspondientes del candidato o de la búsqueda.
   - **Autenticación requerida**: Header `Authorization: Bearer <token_firebase>` (JWT de Firebase).
   - **Respuestas**:
@@ -587,11 +605,12 @@ En GitHub, crear un PR desde develop a main:
   En Pull request,botón New pull request. Base: main, compare: develop.  
   En verde sin conflictos, Create pull request. 
   Verificando conflictos, puede demorar, actualizar la página. Botón Merge pull request, confirmar.
+  Hasta estado violeta Merged.
 
 Verificaciones: 
   En GitHub, Actions, en la rama main, ver commit reciente hasta ok en verde.
   Y en Action, ver el workflow (de amarillo a verde).
-  En Google Cloud Run:
+  En Google Cloud Run, proyecto producción:
     https://console.cloud.google.com/run/overview?facet_url=https:%2F%2Fcloud.google.com%2Ffree&project=azul-ats-prod
     Ver la fecha actualizada del servicio. 
     Puede requerir ver en Cloud Build, el Build history.
@@ -716,6 +735,8 @@ A continuación, se detalla una guía rápida de diagnóstico y resolución de e
 
 --------------------------------------------------------------------------------------------------------------------------------------
 # Log de Cambios (Changelog)
+
+* **2026-08-21**: Implementación del Módulo de Test de Personalidad / Cognitive Fit Vision (CFV) - V3 con Inteligencia Artificial. Creación del endpoint protegido `POST /api/v1/pipeline/:id/analizar-personalidad` para ingesta de imágenes de capturas de tests (PNG, JPG, JPEG, WEBP <5MB) mediante Multer en RAM (`memoryStorage`) con campo `imagen` y fallback a `file`, y bloqueo estricto (HTTP 400) para formatos no compatibles. Inferencia multimodal con **Vertex AI (Gemini 2.5 Flash)** forzando respuesta estructurada mediante Zod (`TestPersonalidadSchema`) con acotación de 5 dimensiones psicométricas (`dim_mente`, `dim_energia`, `dim_naturaleza`, `dim_tactica`, `dim_identidad`) entre 0 y 100%, inyección automática del timestamp ISO 8601 `fecha_analisis` generado por el backend y persistencia en `pipeline_entrevistas` bajo `f2_evaluacion.test_personalidad`. Soporte de edición manual *Human-in-the-Loop* vía `PATCH /api/v1/pipeline/:id`. Incorporación de suite de pruebas unitarias (`tests/unit/pipeline-test-personalidad.test.js`) y actualización de documentación funcional en `docs/explicacion_funcional_servicio backend.md`.
 
 * **2026-08-20**: Actualización de los workflows automatizados de CI/CD en GitHub Actions ([`.github/workflows/deploy-staging.yml`](.github/workflows/deploy-staging.yml) y [`deploy-production.yml`](.github/workflows/deploy-production.yml)). Inyección del secreto `SENDGRID_INBOUND_WEBHOOK_SECRET` a nivel de Google Cloud Run mediante la extracción de `SENDGRID_INBOUND_WEBHOOK_SECRET_STAGING` y `SENDGRID_INBOUND_WEBHOOK_SECRET_PRODUCTION` desde GitHub Secrets en los despliegues de Staging y Producción respectivamente. Actualización de la documentación en `README.md`.
 

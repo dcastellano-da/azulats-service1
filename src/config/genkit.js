@@ -55,6 +55,24 @@ if (process.env.NODE_ENV === 'test') {
         };
       }
 
+      // Si la llamada incluye el esquema de Test de Personalidad (CFV)
+      if (options.output?.schema?.shape?.arquetipo_codigo) {
+        return {
+          output: {
+            arquetipo_codigo: 'ENTJ-A',
+            arquetipo_nombre: 'Comandante',
+            dimensiones: {
+              dim_mente: 35,
+              dim_energia: 78,
+              dim_naturaleza: 82,
+              dim_tactica: 90,
+              dim_identidad: 85
+            },
+            analisis_encaje: 'El perfil ENTJ-A demuestra alta capacidad de liderazgo y orientación estratégica ideal para la vacante.'
+          }
+        };
+      }
+
       // Estructura por defecto para importación de candidatos
       return {
         output: {

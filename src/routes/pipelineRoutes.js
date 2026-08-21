@@ -7,7 +7,8 @@ import {
   actualizarPipeline,
   eliminarPipeline,
   evaluarScreeningPipeline,
-  analizarTranscripcionPipeline
+  analizarTranscripcionPipeline,
+  analizarTestPersonalidadPipeline
 } from '../controllers/pipelineController.js';
 import { verificarToken } from '../middlewares/authMiddleware.js';
 
@@ -41,6 +42,55 @@ const upload = multer({
 
 const uploadTranscripcion = upload.single('transcripcion');
 
+// Configuración de Multer para carga de test de personalidad (imágenes) en memoria RAM
+const imageFileFilter = (req, file, cb) => {
+  const allowedMimeTypes = [
+    'image/png',
+    'image/jpeg',
+    'image/jpg',
+    'image/webp'
+  ];
+  const allowedExtensions = /\.(png|jpg|jpeg|webp)$/i;
+
+  if (allowedMimeTypes.includes(file.mimetype) || allowedExtensions.test(file.originalname)) {
+    cb(null, true);
+  } else {
+    cb(new Error('Tipo de archivo no permitido. Solo se aceptan formatos de imagen (PNG, JPG, JPEG, WEBP).'), false);
+  }
+};
+
+const uploadImagenMulter = multer({
+  storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024 // Límite de 5MB
+  },
+  fileFilter: imageFileFilter
+});
+
+const uploadTestPersonalidadFields = uploadImagenMulter.fields([
+  { name: 'imagen', maxCount: 1 },
+  { name: 'file', maxCount: 1 }
+]);
+
+const uploadTestPersonalidad = (req, res, next) => {
+  uploadTestPersonalidadFields(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({
+        status: 'error',
+        message: err.message || 'Error al procesar la carga de la imagen del test de personalidad.'
+      });
+    }
+    if (!req.file && req.files) {
+      if (req.files.imagen && req.files.imagen.length > 0) {
+        req.file = req.files.imagen[0];
+      } else if (req.files.file && req.files.file.length > 0) {
+        req.file = req.files.file[0];
+      }
+    }
+    next();
+  });
+};
+
 // POST /api/v1/pipeline - Crea un vínculo candidatos-búsqueda en el flujo
 router.post('/', verificarToken, crearPipeline);
 
@@ -65,6 +115,9 @@ router.post('/:id/analizar-transcripcion', verificarToken, (req, res, next) => {
     next();
   });
 }, analizarTranscripcionPipeline);
+
+// POST /api/v1/pipeline/:id/analizar-personalidad - Analiza captura de test de personalidad con IA (Gemini 2.5 Flash)
+router.post('/:id/analizar-personalidad', verificarToken, uploadTestPersonalidad, analizarTestPersonalidadPipeline);
 
 // PATCH /api/v1/pipeline/:id - Actualización de estado y análisis IA en el pipeline
 router.patch('/:id', verificarToken, actualizarPipeline);
