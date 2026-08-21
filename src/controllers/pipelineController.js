@@ -397,6 +397,14 @@ export const actualizarPipeline = async (req, res) => {
         updates['f2_evaluacion.informe_entrevista_ia'] = body.informe_entrevista_ia;
       }
 
+      if (body.f2_evaluacion?.test_personalidad !== undefined) {
+        updates['f2_evaluacion.test_personalidad'] = body.f2_evaluacion.test_personalidad;
+      } else if (body['f2_evaluacion.test_personalidad'] !== undefined) {
+        updates['f2_evaluacion.test_personalidad'] = body['f2_evaluacion.test_personalidad'];
+      } else if (body.test_personalidad !== undefined) {
+        updates['f2_evaluacion.test_personalidad'] = body.test_personalidad;
+      }
+
       // 6. Procesar f3_cliente (feedback_cliente, notas_reclutador, reuniones)
       if (body.f3_cliente?.feedback_cliente !== undefined) {
         updates['f3_cliente.feedback_cliente'] = body.f3_cliente.feedback_cliente;
@@ -530,7 +538,7 @@ export const actualizarPipeline = async (req, res) => {
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({
         status: 'error',
-        message: 'No se enviaron campos válidos para actualizar (puedes actualizar estado_actual, analisis_semantico, f1_descubrimiento, f2_evaluacion, f3_cliente, f4_cierre, resolucion, resultado_screening).'
+        message: 'No se enviaron campos válidos para actualizar (puedes actualizar estado_actual, analisis_semantico, f1_descubrimiento, f2_evaluacion, f3_cliente, f4_cierre, resolucion, resultado_screening, test_personalidad).'
       });
     }
 
@@ -1008,4 +1016,152 @@ Genera un informe estructurado y auditable que sintetice la trayectoria real val
     });
   }
 };
+
+// Schema Zod para forzar la respuesta de Genkit / Gemini para el Test de Personalidad (CFV - V3)
+const TestPersonalidadSchema = z.object({
+  arquetipo_codigo: z.string().describe('El código de 4 o 5 letras del arquetipo extraído (ej: "ENTJ-A", "INFP-T").'),
+  arquetipo_nombre: z.string().describe('El título o nombre del perfil de personalidad (ej: "Comandante", "Mediador").'),
+  dimensiones: z.object({
+    dim_mente: z.number().min(0).max(100).describe('Porcentaje de Extravertido (0) vs Introvertido (100).'),
+    dim_energia: z.number().min(0).max(100).describe('Porcentaje de Intuitivo (0) vs Observador/Realista (100).'),
+    dim_naturaleza: z.number().min(0).max(100).describe('Porcentaje de Racional/Pensamiento (0) vs Emocional/Sentimiento (100).'),
+    dim_tactica: z.number().min(0).max(100).describe('Porcentaje de Planificador/Juzgador (0) vs Prospectivo/Explorador (100).'),
+    dim_identidad: z.number().min(0).max(100).describe('Porcentaje de Asertivo (0) vs Turbulento (100).')
+  }).describe('Objeto anidado con las 5 métricas numéricas del test de personalidad (0 a 100).'),
+  analisis_encaje: z.string().describe('Párrafo breve generado por la IA argumentando el encaje cultural y conductual para el puesto solicitado.')
+});
+
+/**
+ * POST /api/v1/pipeline/:id/analizar-personalidad
+ * Recibe la imagen de la captura del test de personalidad en RAM (PNG/JPG/WEBP), recupera los criterios y perfil de la búsqueda,
+ * realiza inferencia multimodal con Vertex AI (Gemini 2.5 Flash) y persiste el resultado en f2_evaluacion.test_personalidad con timestamp inyectado.
+ */
+export const analizarTestPersonalidadPipeline = async (req, res) => {
+  const { id } = req.params;
+  const file = req.file;
+
+  if (!id) {
+    return res.status(400).json({
+      status: 'error',
+      message: 'El identificador del pipeline en la ruta es requerido.'
+    });
+  }
+
+  if (!file) {
+    return res.status(400).json({
+      status: 'error',
+      message: 'El archivo de imagen del test de personalidad (PNG, JPG, JPEG o WEBP) es obligatorio en el campo "imagen" (o "file").'
+    });
+  }
+
+  try {
+    // 1. Obtener registro del pipeline
+    const pipelineRef = db.collection('pipeline_entrevistas').doc(id);
+    const pipelineDoc = await pipelineRef.get();
+
+    if (!pipelineDoc.exists) {
+      return res.status(404).json({
+        status: 'error',
+        message: `El registro de pipeline con ID '${id}' no existe.`
+      });
+    }
+
+    const pipelineData = pipelineDoc.data();
+    const idBusqueda = pipelineData.claves_conexion?.id_busqueda;
+
+    if (!idBusqueda) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'El registro de pipeline no posee un id_busqueda válido en claves_conexion.'
+      });
+    }
+
+    // 2. Obtener criterios y detalles de la búsqueda asociada
+    const busquedaDoc = await db.collection('busquedas').doc(idBusqueda).get();
+    if (!busquedaDoc.exists) {
+      return res.status(404).json({
+        status: 'error',
+        message: `La búsqueda asociada con ID '${idBusqueda}' no existe.`
+      });
+    }
+
+    const busquedaData = busquedaDoc.data();
+    const criteriosScreening = busquedaData.criterios_screening || [];
+    const promptCriterios = criteriosScreening.map(c => `[ID: ${c.id}] (Tipo: ${c.tipo}, Peso: ${c.peso}) Pregunta: ${c.pregunta}`).join('\n');
+
+    // 3. Convertir el buffer de la imagen cargada en RAM a Data URI Base64
+    const base64Image = file.buffer.toString('base64');
+    const imageDataUrl = `data:${file.mimetype};base64,${base64Image}`;
+
+    // 4. Armar el prompt para triangulación de contexto
+    const promptText = `Analiza detalladamente la imagen adjunta correspondiente a los resultados de un test de personalidad (como 16Personalities o similar).
+
+Información del Puesto y Búsqueda de Empleo:
+- Título de la búsqueda: ${busquedaData.titulo_busqueda || busquedaData.nombre || 'Búsqueda activa'}
+- Requisitos / Criterios de Selección:
+${promptCriterios || 'Sin criterios específicos configurados.'}
+
+Instrucciones:
+1. Extrae con precisión el código del arquetipo (ej: ENTJ-A, INFP-T) y su nombre/título (ej: Comandante, Mediador).
+2. Extrae o calcula el valor numérico en escala de 0 a 100 para las 5 dimensiones psicométricas: Mente (dim_mente), Energía (dim_energia), Naturaleza (dim_naturaleza), Táctica (dim_tactica) e Identidad (dim_identidad).
+3. Genera un análisis breve de encaje cultural y conductual (analisis_encaje) argumentando las fortalezas o posibles riesgos de este perfil frente a los requerimientos de la posición.`;
+
+    // 5. Inferencia multimodal con Genkit / Gemini 2.5 Flash
+    const aiResponse = await ai.generate({
+      model: modelRef,
+      prompt: [
+        {
+          media: {
+            url: imageDataUrl,
+            contentType: file.mimetype
+          }
+        },
+        { text: promptText }
+      ],
+      output: { schema: TestPersonalidadSchema }
+    });
+
+    const extractedResult = aiResponse?.output;
+
+    if (!extractedResult) {
+      return res.status(500).json({
+        status: 'error',
+        message: 'No se pudo obtener una respuesta estructurada del modelo de Inteligencia Artificial para el test de personalidad.'
+      });
+    }
+
+    // 6. Inyectar marca temporal ISO 8601 generada por el backend
+    const timestamp = new Date().toISOString();
+    const finalResult = {
+      ...extractedResult,
+      fecha_analisis: timestamp
+    };
+
+    // 7. Persistir en Firestore en f2_evaluacion.test_personalidad
+    const updates = {
+      'f2_evaluacion.test_personalidad': finalResult,
+      updatedAt: timestamp
+    };
+
+    await pipelineRef.update(updates);
+
+    const updatedSnap = await pipelineRef.get();
+    const updatedData = updatedSnap.data();
+
+    return res.status(200).json({
+      status: 'success',
+      message: 'Test de personalidad analizado e integrado exitosamente con Inteligencia Artificial.',
+      data: normalizePipelineDoc(pipelineRef.id, updatedData)
+    });
+
+  } catch (error) {
+    console.error('[TEST PERSONALIDAD IA ERROR] Error al analizar test de personalidad con IA:', error.message);
+    return res.status(500).json({
+      status: 'error',
+      message: 'Error interno al procesar el análisis del test de personalidad con Inteligencia Artificial.',
+      detail: error.message
+    });
+  }
+};
+
 
