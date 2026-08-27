@@ -329,6 +329,38 @@ async function start() {
   }
   console.log("✅ Retrocompatibilidad exitosa: los campos antiguos se mapearon a los nuevos bloques.");
 
+  // 7b. PATCH /:id - Guardar Assessment Técnico Manual e Inmutabilidad Temporal de fecha_evaluacion
+  const assessmentManualBody = {
+    f2_evaluacion: {
+      assessment_manual: {
+        resumen_texto: 'El candidato cuenta con sólidos conocimientos en arquitecturas Node.js y Cloud Firestore.',
+        fecha_evaluacion: '1999-01-01T00:00:00Z' // Fecha manipulada enviada por el cliente
+      }
+    }
+  };
+
+  const patchAssessmentRes = await runTestCase('Probar actualización de Assessment Técnico Manual (HTTP 200 y sello de tiempo inmutable)', {
+    method: 'PATCH',
+    url: `${BASE_URL}/${pipelineId}`,
+    headers: {
+      'Authorization': 'Bearer mock-token-recruiter',
+      'Content-Type': 'application/json'
+    },
+    body: assessmentManualBody
+  }, 200);
+
+  const dataAssessment = patchAssessmentRes.body.data;
+  if (
+    !dataAssessment.f2_evaluacion?.assessment_manual ||
+    dataAssessment.f2_evaluacion.assessment_manual.resumen_texto !== assessmentManualBody.f2_evaluacion.assessment_manual.resumen_texto ||
+    !dataAssessment.f2_evaluacion.assessment_manual.fecha_evaluacion ||
+    dataAssessment.f2_evaluacion.assessment_manual.fecha_evaluacion === '1999-01-01T00:00:00Z'
+  ) {
+    console.error("❌ ERROR: La actualización de assessment_manual o la inmutabilidad de fecha_evaluacion falló.");
+    process.exit(1);
+  }
+  console.log(`✅ Assessment Técnico guardado exitosamente. Sello de tiempo inmutable generado por servidor: ${dataAssessment.f2_evaluacion.assessment_manual.fecha_evaluacion}`);
+
   // 8. GET /:id - Consultar pipeline individual por ID
   const getByIdRes = await runTestCase('Obtener pipeline individual por ID (HTTP 200)', {
     method: 'GET',
