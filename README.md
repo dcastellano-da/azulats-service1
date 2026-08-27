@@ -71,7 +71,7 @@ Funciona como una **colección puente N a N** (`pipeline_entrevistas`) para cone
   * `Resolución` (`Contratado` / `Descartado`).
 * **Estructura Interna Desagregada por Fase**:
   * `f1_descubrimiento`: Análisis semántico por IA (`fit_score`, fortalezas, debilidades), outreach.
-  * `f2_evaluacion`: Puntaje técnico y notas del reclutador.
+  * `f2_evaluacion`: Puntaje técnico, notas del reclutador, informe de entrevista por IA, test de personalidad y `assessment_manual` (evaluación técnica manual del reclutador con `resumen_texto` y sello de tiempo inmutable del servidor `fecha_evaluacion`).
   * `f3_cliente`: Feedback del cliente.
   * `f4_cierre`: Condiciones de la oferta económica.
   * `resolucion`: Estado final, motivo de rechazo y fecha de resolución.
@@ -735,6 +735,8 @@ A continuación, se detalla una guía rápida de diagnóstico y resolución de e
 
 --------------------------------------------------------------------------------------------------------------------------------------
 # Log de Cambios (Changelog)
+
+* **2026-08-27**: Implementación del Módulo de Assessment Técnico Manual (Evaluación Técnica) con Trazabilidad e Inmutabilidad Temporal. Extensión del endpoint `PATCH /api/v1/pipeline/:id` y actualización del esquema de la colección `pipeline_entrevistas` para incluir el objeto `f2_evaluacion.assessment_manual` (`resumen_texto` validado con Zod hasta 10.000 caracteres). Implementación de la regla estricta de inmutabilidad temporal mediante la cual el backend ignora cualquier fecha provista por el cliente HTTP e inyecta obligatoriamente el timestamp ISO 8601 del servidor (`fecha_evaluacion`). Inicialización de `assessment_manual: null` en `POST /api/v1/pipeline`. Creación de la suite de pruebas unitarias (`tests/unit/pipeline-assessment-manual.test.js`) y actualización de pruebas de integración E2E (`tests/prueba-pipeline.js`), cumpliendo con la Política de Cero Regresiones. Actualización de documentación técnica y funcional.
 
 * **2026-08-21**: Implementación del Módulo de Test de Personalidad / Cognitive Fit Vision (CFV) - V3 con Inteligencia Artificial. Creación del endpoint protegido `POST /api/v1/pipeline/:id/analizar-personalidad` para ingesta de imágenes de capturas de tests (PNG, JPG, JPEG, WEBP <5MB) mediante Multer en RAM (`memoryStorage`) con campo `imagen` y fallback a `file`, y bloqueo estricto (HTTP 400) para formatos no compatibles. Inferencia multimodal con **Vertex AI (Gemini 2.5 Flash)** forzando respuesta estructurada mediante Zod (`TestPersonalidadSchema`) con acotación de 5 dimensiones psicométricas (`dim_mente`, `dim_energia`, `dim_naturaleza`, `dim_tactica`, `dim_identidad`) entre 0 y 100%, inyección automática del timestamp ISO 8601 `fecha_analisis` generado por el backend y persistencia en `pipeline_entrevistas` bajo `f2_evaluacion.test_personalidad`. Soporte de edición manual *Human-in-the-Loop* vía `PATCH /api/v1/pipeline/:id`. Incorporación de suite de pruebas unitarias (`tests/unit/pipeline-test-personalidad.test.js`) y actualización de documentación funcional en `docs/explicacion_funcional_servicio backend.md`.
 

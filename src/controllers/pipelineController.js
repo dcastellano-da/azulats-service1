@@ -187,7 +187,8 @@ export const crearPipeline = async (req, res) => {
       f2_evaluacion: {
         puntaje_tecnico: null,
         notas_reclutador: null,
-        reuniones: []
+        reuniones: [],
+        assessment_manual: null
       },
       f3_cliente: {
         feedback_cliente: null,
@@ -403,6 +404,38 @@ export const actualizarPipeline = async (req, res) => {
         updates['f2_evaluacion.test_personalidad'] = body['f2_evaluacion.test_personalidad'];
       } else if (body.test_personalidad !== undefined) {
         updates['f2_evaluacion.test_personalidad'] = body.test_personalidad;
+      }
+
+      // Procesar f2_evaluacion.assessment_manual (Resumen de Evaluación Técnica)
+      const assessmentManualInput = body.f2_evaluacion?.assessment_manual !== undefined
+        ? body.f2_evaluacion.assessment_manual
+        : (body['f2_evaluacion.assessment_manual'] !== undefined
+            ? body['f2_evaluacion.assessment_manual']
+            : body.assessment_manual);
+
+      if (assessmentManualInput !== undefined) {
+        if (typeof assessmentManualInput !== 'object' || assessmentManualInput === null) {
+          throw new Error('El campo assessment_manual debe ser un objeto.');
+        }
+
+        const assessmentManualSchema = z.object({
+          resumen_texto: z.string({
+            required_error: 'El campo resumen_texto es obligatorio en assessment_manual.',
+            invalid_type_error: 'El campo resumen_texto debe ser un string.'
+          }).min(1, 'El campo resumen_texto no puede estar vacío.').max(10000, 'El resumen de evaluación técnica no puede exceder los 10000 caracteres.')
+        });
+
+        const parseResult = assessmentManualSchema.safeParse(assessmentManualInput);
+        if (!parseResult.success) {
+          const issues = parseResult.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join(', ');
+          throw new Error(`Datos de assessment_manual inválidos: ${issues}`);
+        }
+
+        // Inmutabilidad Temporal: El servidor inyecta obligatoriamente la fecha del reloj interno del servidor, ignorando cualquier fecha enviada por el cliente
+        updates['f2_evaluacion.assessment_manual'] = {
+          resumen_texto: parseResult.data.resumen_texto,
+          fecha_evaluacion: timestamp
+        };
       }
 
       // 6. Procesar f3_cliente (feedback_cliente, notas_reclutador, reuniones)
