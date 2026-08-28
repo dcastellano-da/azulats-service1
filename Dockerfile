@@ -13,6 +13,19 @@ WORKDIR /usr/src/app
 # si package.json no cambia, npm install no se re-ejecuta en cada build.
 COPY package*.json ./
 
+# Instalar Chromium y dependencias de fuentes para Puppeteer en Alpine Linux
+RUN apk add --no-cache \
+      chromium \
+      nss \
+      freetype \
+      harfbuzz \
+      ca-certificates \
+      ttf-freefont
+
+# Variable de entorno para indicarle a Puppeteer que use el Chromium del sistema en contenedor
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
 # Instalar solo dependencias de producción (sin devDependencies)
 RUN npm install --production
 

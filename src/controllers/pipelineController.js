@@ -1,7 +1,9 @@
 import { db, bucket } from '../config/firebase.js';
 import crypto from 'crypto';
+import fs from 'fs';
 import { z } from 'zod';
 import { ai, modelRef } from '../config/genkit.js';
+import { generarHtmlFichaPdf, renderizarPdfFromHtml } from '../services/pdfService.js';
 
 /**
  * Normaliza la serialización de un documento de pipeline hacia HTTP.
@@ -1196,5 +1198,210 @@ Instrucciones:
     });
   }
 };
+
+/**
+ * Schema Zod para validar el payload de opciones del modal pre-generación del PDF.
+ */
+const GenerarFichaSchema = z.object({
+  incluir_test_personalidad: z.boolean().optional().default(true),
+  incluir_pretension_salarial: z.boolean().optional().default(true),
+  incluir_notas_assessment: z.boolean().optional().default(true),
+  incluir_bitacora: z.boolean().optional().default(true),
+  incluir_trayectoria: z.boolean().optional().default(true),
+  anonimizar_candidato: z.boolean().optional().default(false)
+});
+
+/**
+ * POST /api/v1/pipeline/:id/generar-ficha-pdf
+ * Consolida información del candidato, vacante, evaluación psicométrica, assessment y bitacora F1-F4,
+ * redacta un resumen ejecutivo al vuelo con Gemini 2.5 Flash en base a los bloques seleccionados,
+ * renderiza la plantilla HTML y devuelve la Ficha Técnica binaria en PDF.
+ */
+export const generarFichaPdfPipeline = async (req, res) => {
+  const { id } = req.params;
+
+  if (!id) {
+    return res.status(400).json({
+      status: 'error',
+      message: 'El identificador del pipeline en la ruta es requerido.'
+    });
+  }
+
+  // 1. Validar opciones enviadas en el body con Zod
+  const parseResult = GenerarFichaSchema.safeParse(req.body || {});
+  if (!parseResult.success) {
+    const issues = parseResult.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join(', ');
+    return res.status(400).json({
+      status: 'error',
+      message: `Opciones de generación de ficha inválidas: ${issues}`
+    });
+  }
+  const opciones = parseResult.data;
+
+  try {
+    // 2. Obtener documento del pipeline
+    const pipelineRef = db.collection('pipeline_entrevistas').doc(id);
+    const pipelineDoc = await pipelineRef.get();
+
+    if (!pipelineDoc.exists) {
+      return res.status(404).json({
+        status: 'error',
+        message: `El registro de pipeline con ID '${id}' no existe.`
+      });
+    }
+
+    const pipelineData = pipelineDoc.data();
+    const idBusqueda = pipelineData.claves_conexion?.id_busqueda;
+    const idCandidato = pipelineData.claves_conexion?.id_candidato;
+
+    if (!idBusqueda || !idCandidato) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'El registro de pipeline no posee claves_conexion válidas (id_busqueda e id_candidato).'
+      });
+    }
+
+    // 3. Obtener vacante (búsqueda) y candidato (postulante)
+    const busquedaDoc = await db.collection('busquedas').doc(idBusqueda).get();
+    if (!busquedaDoc.exists) {
+      return res.status(404).json({
+        status: 'error',
+        message: `La búsqueda asociada con ID '${idBusqueda}' no existe.`
+      });
+    }
+    const busquedaData = busquedaDoc.data();
+
+    const candidatoDoc = await db.collection('postulantes').doc(idCandidato).get();
+    if (!candidatoDoc.exists) {
+      return res.status(404).json({
+        status: 'error',
+        message: `El candidato asociado con ID '${idCandidato}' no existe.`
+      });
+    }
+    const candidatoData = { id: candidatoDoc.id, ...candidatoDoc.data() };
+
+    // 4. Obtener configuración de agencia (p-cfg-01 -> global -> fallback default)
+    let agenciaConfig = { nombre_comercial: 'Azul ATS Agency', logo_url: null, color_primario: '#1e3a8a' };
+    try {
+      let agenciaDoc = await db.collection('configuracion_agencia').doc('p-cfg-01').get();
+      if (!agenciaDoc.exists) {
+        agenciaDoc = await db.collection('configuracion_agencia').doc('global').get();
+      }
+      if (agenciaDoc.exists) {
+        agenciaConfig = { ...agenciaConfig, ...agenciaDoc.data() };
+      }
+    } catch (cfgErr) {
+      console.warn('[FICHA PDF] No se pudo cargar configuracion_agencia de Firestore, usando defaults:', cfgErr.message);
+    }
+
+    // 5. Construcción del prompt dinámico para Gemini 2.5 Flash
+    const rolSolicitado = busquedaData.perfil_tecnico?.rol_solicitado || busquedaData.titulo_busqueda || 'Rol Solicitado';
+    const cliente = busquedaData.identificacion?.cliente || 'Empresa Cliente';
+
+    const seccionesParaIA = [];
+
+    if (opciones.incluir_trayectoria && candidatoData.resumen) {
+      seccionesParaIA.push(`- Trayectoria / Perfil: ${candidatoData.resumen} (Skills: ${candidatoData.skills_principales || 'No especificados'})`);
+    }
+
+    if (opciones.incluir_test_personalidad && pipelineData.f2_evaluacion?.test_personalidad) {
+      const test = pipelineData.f2_evaluacion.test_personalidad;
+      seccionesParaIA.push(`- Test Psicométrico: Arquetipo ${test.arquetipo_nombre || ''} (${test.arquetipo_codigo || ''}). Encaje: ${test.analisis_encaje || ''}`);
+    }
+
+    if (opciones.incluir_pretension_salarial && pipelineData.f2_evaluacion?.informe_entrevista_ia?.pretension_economica_condiciones) {
+      const p = pipelineData.f2_evaluacion.informe_entrevista_ia.pretension_economica_condiciones;
+      seccionesParaIA.push(`- Pretensiones y Logística: Salario ${p.pretension_salarial || 'No especificado'}, Modalidad ${p.modalidad_preferida || 'No especificada'}, Disponibilidad ${p.disponibilidad || 'Inmediata'}`);
+    }
+
+    if (opciones.incluir_notas_assessment && pipelineData.f2_evaluacion?.assessment_manual) {
+      seccionesParaIA.push(`- Assessment Técnico Reclutador: ${pipelineData.f2_evaluacion.assessment_manual.resumen_texto}`);
+    }
+
+    if (opciones.incluir_bitacora) {
+      const bitacoraNotas = [];
+      if (pipelineData.f1_descubrimiento?.notas_reclutador) bitacoraNotas.push(`F1 Descubrimiento: ${pipelineData.f1_descubrimiento.notas_reclutador}`);
+      if (pipelineData.f2_evaluacion?.notas_reclutador) bitacoraNotas.push(`F2 Evaluación: ${pipelineData.f2_evaluacion.notas_reclutador}`);
+      if (pipelineData.f3_cliente?.notas_reclutador) bitacoraNotas.push(`F3 Cliente: ${pipelineData.f3_cliente.notas_reclutador}`);
+      if (pipelineData.f4_cierre?.notas_reclutador) bitacoraNotas.push(`F4 Cierre: ${pipelineData.f4_cierre.notas_reclutador}`);
+
+      if (bitacoraNotas.length > 0) {
+        seccionesParaIA.push(`- Bitácora de Notas del Reclutador (F1-F4):\n  ${bitacoraNotas.join('\n  ')}`);
+      }
+    }
+
+    const promptText = `Eres un consultor experto en selección ejecutivo. Redacta un Resumen Ejecutivo profesional, fluido y persuasivo (máximo 2 a 3 párrafos cortos) para presentar al candidato para la vacante "${rolSolicitado}" de la empresa cliente "${cliente}".
+
+INSTRUCCIÓN ESTRICTA: Basar la redacción ÚNICA Y EXCLUSIVAMENTE en la siguiente información seleccionada por el reclutador:
+
+${seccionesParaIA.length > 0 ? seccionesParaIA.join('\n') : 'Sin bloques cualitativos adicionales seleccionados.'}
+
+No inventes datos que no estén en la lista. Si un tema no fue incluido en el listado, ignóralo completamente.`;
+
+    let resumenEjecutivoIA = '';
+    try {
+      const aiResponse = await ai.generate({
+        model: modelRef,
+        prompt: promptText
+      });
+      resumenEjecutivoIA = aiResponse?.text || aiResponse?.output || '';
+    } catch (aiErr) {
+      console.warn('[FICHA PDF] Advertencia al generar síntesis con IA, continuando con plantilla:', aiErr.message);
+      resumenEjecutivoIA = 'Perfil preseleccionado para la posición solicitada con evaluación favorable por parte del equipo de reclutamiento.';
+    }
+
+    // 6. Generar HTML estilizado
+    const datosPdf = {
+      agencia: agenciaConfig,
+      busqueda: busquedaData,
+      postulante: candidatoData,
+      pipeline: pipelineData,
+      resumenEjecutivoIA
+    };
+
+    const htmlString = await generarHtmlFichaPdf(datosPdf, opciones);
+
+    // 7. Renderizar a Buffer PDF con Puppeteer
+    const pdfBuffer = await renderizarPdfFromHtml(htmlString);
+
+    // 8. Enviar respuesta HTTP binaria de PDF y prueba de fuego física
+    const filename = opciones.anonimizar_candidato
+      ? `Ficha_Candidato_${candidatoData.id ? candidatoData.id.substring(0, 8) : 'Anonimo'}.pdf`
+      : `Ficha_${(candidatoData.nombre || 'Candidato').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
+
+    try {
+      fs.writeFileSync('debug_backend.pdf', pdfBuffer);
+      console.log('[DEBUG BACKEND] Volcado físico exitoso en raíz: debug_backend.pdf (', pdfBuffer.length, 'bytes)');
+    } catch (fsErr) {
+      console.error('[DEBUG BACKEND ERROR] No se pudo escribir debug_backend.pdf:', fsErr.message);
+    }
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', pdfBuffer.length);
+    console.log('[DEBUG BACKEND] Enviando respuesta HTTP binaria cruda vía res.end() (HTTP 200). Bytes:', pdfBuffer.length);
+    return res.status(200).end(pdfBuffer, 'binary');
+
+  } catch (error) {
+    console.error('[GENERAR FICHA PDF ERROR] Detalle técnico del fallo al generar Ficha PDF:', error);
+
+    let errorMessage = 'Error interno al generar la Ficha Técnica en PDF.';
+
+    if (error.isPuppeteerLaunchError || (error.message && error.message.includes('Falta binario de Chrome'))) {
+      errorMessage = 'Error de infraestructura: Motor de renderizado PDF no disponible (Falta binario de Chrome)';
+    } else if (error.isTimeout || (error.message && /timeout/i.test(error.message))) {
+      errorMessage = 'Error de infraestructura: Tiempo de espera agotado al renderizar el documento PDF.';
+    } else if (error.isPuppeteerRenderError || (error.message && error.message.includes('Error de infraestructura'))) {
+      errorMessage = error.message;
+    }
+
+    return res.status(500).json({
+      status: 'error',
+      message: errorMessage,
+      detail: error.originalError || error.message
+    });
+  }
+};
+
 
 
