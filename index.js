@@ -7,6 +7,7 @@ import busquedasRoutes from './src/routes/busquedasRoutes.js';
 import candidatosRoutes from './src/routes/candidatosRoutes.js';
 import pipelineRoutes from './src/routes/pipelineRoutes.js';
 import webhooksRoutes from './src/routes/webhooksRoutes.js';
+import configuracionRoutes from './src/routes/configuracionRoutes.js';
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -84,6 +85,7 @@ app.use('/api/v1/busquedas', busquedasRoutes);
 app.use('/api/v1/candidatos', cors(corsOptions), candidatosRoutes);
 app.use('/api/v1/pipeline', cors(corsOptions), pipelineRoutes);
 app.use('/api/v1/webhooks', webhooksRoutes);
+app.use('/api/v1/configuracion-agencia', cors(corsOptions), configuracionRoutes);
 
 // Manejador de errores para interceptar violaciones de CORS y otros errores de Express
 app.use((err, req, res, next) => {

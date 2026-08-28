@@ -8,7 +8,8 @@ import {
   eliminarPipeline,
   evaluarScreeningPipeline,
   analizarTranscripcionPipeline,
-  analizarTestPersonalidadPipeline
+  analizarTestPersonalidadPipeline,
+  generarFichaPdfPipeline
 } from '../controllers/pipelineController.js';
 import { verificarToken } from '../middlewares/authMiddleware.js';
 
@@ -118,6 +119,9 @@ router.post('/:id/analizar-transcripcion', verificarToken, (req, res, next) => {
 
 // POST /api/v1/pipeline/:id/analizar-personalidad - Analiza captura de test de personalidad con IA (Gemini 2.5 Flash)
 router.post('/:id/analizar-personalidad', verificarToken, uploadTestPersonalidad, analizarTestPersonalidadPipeline);
+
+// POST /api/v1/pipeline/:id/generar-ficha-pdf - Genera la Ficha Técnica de Presentación a Cliente en PDF
+router.post('/:id/generar-ficha-pdf', verificarToken, generarFichaPdfPipeline);
 
 // PATCH /api/v1/pipeline/:id - Actualización de estado y análisis IA en el pipeline
 router.patch('/:id', verificarToken, actualizarPipeline);

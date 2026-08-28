@@ -733,8 +733,53 @@ A continuación, se detalla una guía rápida de diagnóstico y resolución de e
 
 
 
+- **POST /api/v1/pipeline/:id/generar-ficha-pdf** 🔒 *(Ruta protegida)*: Consolida los datos del pipeline, ejecuta inferencia con **Gemini 2.5 Flash** para redactar el resumen ejecutivo al vuelo según las opciones seleccionadas, renderiza una plantilla HTML/CSS ejecutiva y retorna el documento binario PDF listo para descarga local.
+  - **Autenticación requerida**: Header `Authorization: Bearer <token_firebase>` (JWT de Firebase).
+  - **Cuerpo de la Petición (JSON)**:
+    ```json
+    {
+      "incluir_test_personalidad": true,
+      "incluir_pretension_salarial": true,
+      "incluir_notas_assessment": true,
+      "incluir_bitacora": true,
+      "incluir_trayectoria": true,
+      "anonimizar_candidato": false
+    }
+    ```
+  - **Flujo de Ejecución**:
+    1. Consolida datos de `pipeline_entrevistas`, `busquedas`, `postulantes` y la marca corporativa `configuracion_agencia/p-cfg-01`.
+    2. Agrupa las notas de bitácora del reclutador a través de todas las fases (Fases F1, F2, F3 y F4).
+    3. Invoca a **Gemini 2.5 Flash** para generar una síntesis ejecutiva basada únicamente en los bloques seleccionados.
+    4. Renderiza la plantilla HTML/CSS ejecutiva con Puppeteer en memoria RAM y retorna el binario PDF con cabecera `Content-Type: application/pdf`.
+  - **Respuestas**:
+    * `HTTP 200 OK`: Binario `application/pdf` listo para descarga transparente.
+    * `HTTP 400 Bad Request`: Payload JSON o ID de pipeline inválido.
+    * `HTTP 404 Not Found`: No existe la relación de pipeline o entidades asociadas.
+
+### E. Configuración de Agencia (`/api/v1/configuracion-agencia`)
+* **GET /api/v1/configuracion-agencia** 🔒 *(Ruta protegida)*: Obtiene la configuración institucional de la agencia (`configuracion_agencia/p-cfg-01`). Si aún no existe en Firestore, devuelve los valores iniciales predeterminados con HTTP 200.
+* **POST /api/v1/configuracion-agencia** 🔒 *(Ruta protegida)*: Guarda o actualiza los datos de la agencia en Firestore (creando la colección y documento automáticamente si no existen). Admite `nombre_comercial`, `color_primario`, `sello_texto`, `email_contacto`, `telefono_contacto`, `direccion` y `logo_url`.
+* **PUT /api/v1/configuracion-agencia** 🔒 *(Ruta protegida)*: Alias HTTP PUT para actualizar los datos de la agencia.
+* **POST /api/v1/configuracion-agencia/logo** 🔒 *(Ruta protegida)*: Carga la imagen de logo (`multipart/form-data` con campo `logo` o `file`, formatos PNG/JPG/WEBP/SVG <5MB) a Firebase Storage y actualiza la propiedad `logo_url` en Firestore.
+
+### F. Automatización del Entorno Puppeteer (Headless Chrome)
+El proyecto incluye un script de tipo `postinstall` en `package.json` (`"postinstall": "npx puppeteer browsers install chrome || true"`) que descarga de forma transparente el binario de **Headless Chrome** compatible en la caché del entorno local (`~/.cache/puppeteer`) durante cada `npm install`.
+
+- **Entorno Local**: Puppeteer utiliza el navegador de la caché para renderizar Fichas Técnicas PDF de alta fidelidad.
+- **Limpieza de Caché de Puppeteer (Troubleshooting)**: Si el binario local se corrompe o requiere reinstalación limpia, ejecuta:
+  ```bash
+  rm -rf ~/.cache/puppeteer && npm install
+  ```
+- **Entorno Docker / Cloud Run**: La descarga de `postinstall` cuenta con tolerancia a fallos (`|| true`) para no interferir en contenedores Alpine donde Chromium se instala a nivel de SO (`apk add chromium`) bajo `PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true`.
+
 --------------------------------------------------------------------------------------------------------------------------------------
 # Log de Cambios (Changelog)
+
+* **2026-08-27**: Implementación del Módulo de Automatización de Infraestructura de Puppeteer. Adición del script `postinstall` (`"npx puppeteer browsers install chrome || true"`) en `package.json` para garantizar la descarga automática de Headless Chrome en entornos locales sin intervención humana y blindando el pipeline de CI/CD. Refactorización de `src/services/pdfService.js` y `src/controllers/pipelineController.js` para envolver la inicialización de `puppeteer.launch()` en un bloque `try/catch` estricto con registro en `console.error` de los detalles técnicos en Google Cloud Run y respuesta al cliente estructurada en `HTTP 500` con el mensaje: `"Error de infraestructura: Motor de renderizado PDF no disponible (Falta binario de Chrome)"`. Verificación completa con purga de caché local (`rm -rf ~/.cache/puppeteer`) y 100% de la suite de pruebas unitarias superada (59/59 pruebas en verde).
+
+* **2026-08-27**: Implementación del Módulo de Configuración de Agencia y Carga de Logo (`/api/v1/configuracion-agencia`). Creación de los endpoints protegidos `GET /api/v1/configuracion-agencia` (con fallback a valores iniciales por defecto ante documentos inexistentes), `POST` / `PUT /api/v1/configuracion-agencia` (validado con Zod y persistencia en Firestore `configuracion_agencia/p-cfg-01` creando la colección de forma transparente), y `POST /api/v1/configuracion-agencia/logo` (ingesta Multer en RAM, almacenamiento en Firebase Storage `agencia/logo_p-cfg-01_[timestamp]` y actualización de `logo_url`). Creación de la suite de pruebas unitarias (`tests/unit/configuracion-agencia.test.js`) aprobada con 100% de éxito (58/58 pruebas aprobadas), respetando la Política de Cero Regresiones. Actualización de la documentación funcional y del manual de usuario.
+
+* **2026-08-27**: Implementación del Módulo de Generación de Ficha Técnica de Presentación a Cliente en PDF (`POST /api/v1/pipeline/:id/generar-ficha-pdf`). Integración de consolidación multi-fuente de datos (`pipeline_entrevistas`, `busquedas`, `postulantes` y `configuracion_agencia/p-cfg-01`), síntesis ejecutiva generada al vuelo con **Gemini 2.5 Flash** basada estrictamente en los checkboxes seleccionados por el reclutador, consolidación de la bitácora del reclutador a través de todas las fases (Fases F1 a F4), soporte para anonimización de candidato ("Blind Recruiting") y renderizado de PDF en memoria RAM mediante Puppeteer (`src/services/pdfService.js`). Actualización del `Dockerfile` con dependencias de Chromium para Alpine Linux en Cloud Run. Creación de la suite de pruebas unitarias (`tests/unit/pipeline-generar-ficha-pdf.test.js`) con 100% de éxito en la suite general, respetando la Política de Cero Regresiones. Actualización de documentación funcional y técnica.
 
 * **2026-08-27**: Implementación del Módulo de Assessment Técnico Manual (Evaluación Técnica) con Trazabilidad e Inmutabilidad Temporal. Extensión del endpoint `PATCH /api/v1/pipeline/:id` y actualización del esquema de la colección `pipeline_entrevistas` para incluir el objeto `f2_evaluacion.assessment_manual` (`resumen_texto` validado con Zod hasta 10.000 caracteres). Implementación de la regla estricta de inmutabilidad temporal mediante la cual el backend ignora cualquier fecha provista por el cliente HTTP e inyecta obligatoriamente el timestamp ISO 8601 del servidor (`fecha_evaluacion`). Inicialización de `assessment_manual: null` en `POST /api/v1/pipeline`. Creación de la suite de pruebas unitarias (`tests/unit/pipeline-assessment-manual.test.js`) y actualización de pruebas de integración E2E (`tests/prueba-pipeline.js`), cumpliendo con la Política de Cero Regresiones. Actualización de documentación técnica y funcional.
 
